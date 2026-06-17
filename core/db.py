@@ -85,7 +85,8 @@ products = Table(
     Column("unit", String(8), default="m2"), Column("base_cost", Float),
     Column("m_katalog", Float), Column("m_staly", Float), Column("m_posrednik", Float),
     Column("m_agencyjny", Float), Column("m_jedi", Float),
-    Column("active", Integer, default=1), Column("card_file", String(128)), Column("note", Text),
+    Column("active", Integer, default=1), Column("card_file", String(128)),
+    Column("note", Text), Column("min_price", Float),
 )
 price_history = Table(
     "price_history", md,
@@ -139,6 +140,23 @@ def init_db():
     CARDS_DIR.mkdir(parents=True, exist_ok=True)
     OFFERS_DIR.mkdir(parents=True, exist_ok=True)
     md.create_all(get_engine())
+    _migrate()
+
+
+def _migrate():
+    """Dodaje brakujące kolumny w istniejących tabelach (SQLite/Postgres)."""
+    from sqlalchemy import inspect, text
+    eng = get_engine()
+    try:
+        cols = [c["name"] for c in inspect(eng).get_columns("products")]
+    except Exception:
+        return
+    if "min_price" not in cols:
+        try:
+            with eng.begin() as c:
+                c.execute(text("ALTER TABLE products ADD COLUMN min_price FLOAT"))
+        except Exception:
+            pass
 
 
 def is_postgres() -> bool:
@@ -197,7 +215,7 @@ def import_xlsx(path, user="import") -> int:
 def products_df(active_only=False) -> pd.DataFrame:
     init_db()
     q = "SELECT id,section,name,variant,unit,base_cost,m_katalog,m_staly," \
-        "m_posrednik,m_agencyjny,m_jedi,active,card_file,note FROM products"
+        "m_posrednik,m_agencyjny,m_jedi,active,card_file,note,min_price FROM products"
     if active_only:
         q += " WHERE active=1"
     q += " ORDER BY id"
@@ -210,7 +228,7 @@ def save_products_df(df: pd.DataFrame, user="admin") -> int:
     ts = _now()
     cols = ["section", "name", "variant", "unit", "base_cost",
             "m_katalog", "m_staly", "m_posrednik", "m_agencyjny", "m_jedi",
-            "active", "note"]
+            "active", "note", "min_price"]
     changes = 0
     with get_engine().begin() as c:
         for _, row in df.iterrows():

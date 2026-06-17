@@ -55,6 +55,10 @@ edited = st.data_editor(
         "active": st.column_config.CheckboxColumn("Aktywny"),
         "card_file": st.column_config.TextColumn("Karta PDF", disabled=True),
         "note": st.column_config.TextColumn("Notatka"),
+        "min_price": st.column_config.NumberColumn(
+            "Min. cena/szt", format="%.2f",
+            help="Minimalna cena za sztukę — jeśli wyliczona cena jest niższa, "
+                 "oferta podbije ją do tej wartości."),
         **{("Cena: " + t): st.column_config.NumberColumn(disabled=True, format="%.2f")
            for t, _ in db.TIERS},
     })

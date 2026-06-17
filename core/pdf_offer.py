@@ -209,7 +209,7 @@ def build_offer_pdf(out_path, offer: dict, items: list, settings: dict,
 
     # --- tabela pozycji ---
     head = ["Lp.", "Nazwa / opis pozycji", "Wymiar [m]", "Ilość",
-            "Pow. [m²]", "Cena jedn.", "Rab.", "Wartość netto"]
+            "Cena/m²", "Cena/szt", "Rab.", "Wartość netto"]
     data = [head]
     for i, it in enumerate(items, 1):
         nazwa = "<b>%s</b>" % it["nazwa"]
@@ -217,15 +217,16 @@ def build_offer_pdf(out_path, offer: dict, items: list, settings: dict,
             nazwa += "<br/><font size='7.5' color='#777777'>%s</font>" % it["opis"]
         dim = ("%s × %s" % (_fmt(it["szer"]), _fmt(it["wys"]))
                if it.get("szer") and it.get("wys") else "—")
-        cena = (_fmt(it["cena"], 2, " zł") if it.get("cena") not in (None, "")
+        cm2 = _fmt(it["cena_m2"], 2, " zł") if it.get("cena_m2") not in (None, "") else "—"
+        cszt = (_fmt(it["cena_szt"], 2, " zł") if it.get("cena_szt") not in (None, "")
                 else "do wyceny")
         wart = _fmt(it.get("wartosc"), 2, " zł") if it.get("wartosc") is not None else "—"
         data.append([str(i), Paragraph(nazwa, S_CELL), dim,
-                     _fmt(it.get("ilosc"), 0), _fmt(it.get("pow"), 3),
-                     cena, _fmt(it.get("rabat"), 0, "%"), wart])
+                     _fmt(it.get("ilosc"), 0), cm2, cszt,
+                     _fmt(it.get("rabat"), 0, "%"), wart])
 
-    tbl = Table(data, colWidths=[9 * mm, 61 * mm, 21 * mm, 12 * mm, 17 * mm,
-                                 22 * mm, 13 * mm, 25 * mm], repeatRows=1)
+    tbl = Table(data, colWidths=[9 * mm, 54 * mm, 19 * mm, 11 * mm, 21 * mm,
+                                 21 * mm, 11 * mm, 24 * mm], repeatRows=1)
     style = [
         ("BACKGROUND", (0, 0), (-1, 0), BLUE),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -267,7 +268,7 @@ def build_offer_pdf(out_path, offer: dict, items: list, settings: dict,
     ]))
     story += [Spacer(1, 3 * mm), tot, Spacer(1, 5 * mm)]
 
-    if any(i.get("cena") in (None, "") for i in items):
+    if any(i.get("wartosc") in (None, "") for i in items):
         story.append(Paragraph(
             "* Pozycje oznaczone „do wyceny” zostaną wycenione indywidualnie "
             "po doprecyzowaniu specyfikacji.", S_SMALL))
