@@ -67,6 +67,7 @@ c1, c2, _ = st.columns([1, 2, 3])
 if c1.button("💾 Zapisz zmiany", type="primary"):
     save_cols = [c for c in edited.columns if not c.startswith("Cena: ")]
     n = db.save_products_df(edited[save_cols], user="admin")
+    st.cache_data.clear()
     st.success("Zapisano. Zmienionych pól: %d." % n)
     st.rerun()
 
@@ -96,6 +97,7 @@ with st.expander("➕ Dodaj nowy produkt"):
             }])
             db.save_products_df(pd.concat([db.products_df(), new],
                                           ignore_index=True), user="admin")
+            st.cache_data.clear()
             st.success("Dodano produkt.")
             st.rerun()
 
@@ -105,6 +107,7 @@ with st.expander("⇅ Import / eksport XLSX"):
         tmp = Path(tempfile.mkstemp(suffix=".xlsx")[1])
         tmp.write_bytes(up.getvalue())
         n = db.import_xlsx(tmp, user="admin-import")
+        st.cache_data.clear()
         st.success("Zaimportowano %d pozycji." % n)
         st.rerun()
     if st.button("Przygotuj eksport"):

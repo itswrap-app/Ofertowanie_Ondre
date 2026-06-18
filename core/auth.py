@@ -91,7 +91,9 @@ def _bootstrap_from_secrets():
 
 def login_gate():
     """Wstaw na początku każdej strony. Zwraca słownik zalogowanego użytkownika."""
-    db.seed_if_empty()
+    if not st.session_state.get("_seeded"):
+        db.seed_if_empty()
+        st.session_state["_seeded"] = True
     if current_user():
         _sidebar_user()
         return current_user()

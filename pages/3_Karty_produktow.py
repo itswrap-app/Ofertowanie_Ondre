@@ -27,6 +27,7 @@ if isinstance(cur, str) and cur and card_bytes:
     c1.download_button("⬇️ Pobierz kartę", card_bytes, file_name=cur)
     if c2.button("🗑 Usuń przypisanie"):
         db.remove_card(row["id"])
+        st.cache_data.clear()
         st.rerun()
 else:
     st.info("Brak karty dla tego produktu.")
@@ -36,6 +37,7 @@ if up and st.button("💾 Zapisz kartę", type="primary"):
     fname = "%s.pdf" % row["id"]
     db.set_card(row["id"], fname, up.getvalue(),
                 user=auth.current_user()["name"])
+    st.cache_data.clear()
     st.success("Zapisano kartę dla %s." % row["id"])
     st.rerun()
 

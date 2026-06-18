@@ -76,6 +76,7 @@ def _db_url() -> str:
 
 
 _ENGINE = None
+_INIT_DONE = False
 md = MetaData()
 
 products = Table(
@@ -136,11 +137,15 @@ def get_engine():
 
 
 def init_db():
+    global _INIT_DONE
+    if _INIT_DONE:
+        return
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     CARDS_DIR.mkdir(parents=True, exist_ok=True)
     OFFERS_DIR.mkdir(parents=True, exist_ok=True)
     md.create_all(get_engine())
     _migrate()
+    _INIT_DONE = True
 
 
 def _migrate():

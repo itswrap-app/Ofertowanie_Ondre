@@ -22,7 +22,17 @@ EDIT_COLS = ["Produkt", "Opis dla klienta", "Ilość", "Szer [m]", "Wys [m]",
 CALC_COLS = ["Pow [m²]", "Wartość"]
 COLS = EDIT_COLS + CALC_COLS
 
-prod = db.products_df(active_only=True)
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_products():
+    return db.products_df(active_only=True)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_settings():
+    return db.get_settings()
+
+
+prod = _load_products()
 prod["label"] = prod.apply(
     lambda r: ("%s · %s %s" % (r["id"], r["name"], r["variant"] or "")).strip(), axis=1)
 BY_LABEL = prod.set_index("label")
@@ -160,11 +170,14 @@ with tab_pd:
         org_id = ss.get("client", {}).get("pipedrive_org_id")
         if org_id:
             st.success("Klient z Pipedrive: **%s**" % ss["client"]["nazwa"])
-            try:
-                deals = pdc.org_deals(org_id)
-            except Exception as e:
-                deals = []
-                st.error("Deale: %s" % e)
+            dkey = "pd_deals_%s" % org_id
+            if dkey not in ss:
+                try:
+                    ss[dkey] = pdc.org_deals(org_id)
+                except Exception as e:
+                    ss[dkey] = []
+                    st.error("Deale: %s" % e)
+            deals = ss[dkey]
             if deals:
                 dopts = {"#%s · %s" % (d["id"], d.get("title", "")): d["id"] for d in deals}
                 dpick = st.selectbox("Powiąż z dealem (opcjonalnie)", ["—"] + list(dopts.keys()))
@@ -371,7 +384,7 @@ def to_items(df):
 
 
 items = to_items(ss["items"])
-settings = db.get_settings()
+settings = _load_settings()
 net, vat, gross = pricing.totals(items, float(settings["vat_rate"]))
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Pozycji", len(items))
@@ -389,22 +402,22 @@ valid_days = d2.number_input("Ważność [dni]", value=int(settings["offer_valid
 termin = d3.text_input("Termin realizacji", meta.get("termin_realizacji") or "do uzgodnienia")
 uwagi = st.text_input("Uwagi na ofercie", "")
 attach = st.toggle("Dołącz karty produktowe (PDF) dla pozycji, które je mają", value=True)
-
-cards = []
-if attach:
-    seen = set()
-    for i in items:
-        pid = i.get("produkt_id")
-        if i.get("card_file") and pid and pid not in seen:
-            path = db.materialize_card(pid)
-            if path:
-                cards.append(path)
-                seen.add(pid)
-    if cards:
-        st.caption("Załączone karty: %d" % len(cards))
+n_cards = sum(1 for i in items if i.get("card_file")) if attach else 0
+if n_cards:
+    st.caption("Załączone karty: %d" % n_cards)
 
 if st.button("📄 Generuj ofertę PDF", type="primary",
              disabled=not items or not ss["client"].get("nazwa")):
+    cards = []
+    if attach:
+        seen = set()
+        for i in items:
+            pid = i.get("produkt_id")
+            if i.get("card_file") and pid and pid not in seen:
+                path = db.materialize_card(pid)
+                if path:
+                    cards.append(path)
+                    seen.add(pid)
     no = db.next_offer_number() if number.strip() in ("", "(auto)") else number.strip()
     ss["offer_no"] = no
     today = date.today()

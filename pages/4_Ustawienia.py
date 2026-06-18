@@ -71,6 +71,7 @@ s["payment_terms"] = st.text_area("Warunki (drukowane na ofercie)", s["payment_t
 
 if st.button("💾 Zapisz ustawienia firmy", type="primary"):
     db.save_settings(s)
+    st.cache_data.clear()
     st.success("Zapisano.")
 
 st.divider()
