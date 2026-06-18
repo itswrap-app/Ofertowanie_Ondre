@@ -1,38 +1,17 @@
-"""Analiza zapytania klienta (mail) przez Claude API → pozycje oferty."""
+"""Analiza zapytania klienta przez Claude API: jednorazowa + tryb czatu."""
 import json
 import re
 
 MODEL = "claude-sonnet-4-6"
 
 SYSTEM = """Jesteś asystentem ofertowym firmy ONDRE (drukarnia wielkoformatowa, oznakowanie, reklama).
-Analizujesz zapytanie klienta (treść maila) i mapujesz je na pozycje z cennika firmy.
-
-Zwracasz WYŁĄCZNIE poprawny JSON (bez markdown, bez komentarzy) o strukturze:
-{
- "pozycje": [
-   {
-     "id_produktu": "P010" lub null (gdy brak dopasowania w cenniku),
-     "opis_pozycji": "krótki opis pozycji językiem zrozumiałym dla klienta",
-     "ilosc_szt": liczba (domyślnie 1),
-     "szerokosc_m": liczba w metrach lub null,
-     "wysokosc_m": liczba w metrach lub null,
-     "uwagi": "wątpliwości, brakujące informacje, założenia" lub "",
-     "pewnosc": liczba 0-1 (pewność dopasowania do cennika)
-   }
- ],
- "termin_realizacji": "termin z maila" lub null,
- "dodatkowe_informacje": "montaż, dostawa, projekt itp." lub null,
- "dane_klienta": {"firma": ... lub null, "osoba": ... lub null, "email": ... lub null}
-}
-
-Zasady:
-- Wymiary ZAWSZE przeliczaj na metry (np. 50x70 cm → 0.5 i 0.7).
-- Warianty druku: 4+0 = jednostronny kolor, 4+4 = dwustronny kolor, 1+0 = jednostronny mono,
-  5+0 / 5+5 = z kolorem dodatkowym (np. białym). Gdy klient nie precyzuje, wybierz 4+0 i odnotuj w uwagach.
-- Jeśli klient prosi o produkt spoza cennika, dodaj pozycję z id_produktu=null i pewnosc=0.
-- Gdy w mailu jest kilka produktów/wymiarów, utwórz osobne pozycje.
-- Nie wymyślaj ilości ani wymiarów — jeśli ich brak, zostaw null i opisz w uwagach.
-"""
+Analizujesz zapytanie klienta i mapujesz je na pozycje z cennika. Zwracasz WYŁĄCZNIE poprawny JSON:
+{"pozycje":[{"id_produktu":"P010"|null,"opis_pozycji":"...","ilosc_szt":liczba,
+ "szerokosc_m":liczba|null,"wysokosc_m":liczba|null,"uwagi":"...","pewnosc":0-1}],
+ "termin_realizacji":...|null,"dodatkowe_informacje":...|null,
+ "dane_klienta":{"firma":...,"osoba":...,"email":...}}
+Zasady: wymiary w metrach; warianty druku 4+0/4+4/5+0; produkt spoza cennika id_produktu=null;
+nie zmyślaj ilości/wymiarów."""
 
 
 def catalog_block(df) -> str:
@@ -43,77 +22,85 @@ def catalog_block(df) -> str:
     return "\n".join(lines)
 
 
+def _parse_offer_json(text: str) -> dict:
+    """Odporne wyciąganie JSON z odpowiedzi modelu."""
+    t = (text or "").strip()
+    t = re.sub(r"^```(json)?|```$", "", t, flags=re.M).strip()
+    try:
+        return json.loads(t)
+    except Exception:
+        pass
+    i, j = t.find("{"), t.rfind("}")
+    if i != -1 and j != -1 and j > i:
+        try:
+            return json.loads(t[i:j + 1])
+        except Exception:
+            pass
+    raise ValueError("Model nie zwrócił poprawnego JSON. Spróbuj ponownie lub przeformułuj.")
+
+
 def analyze_email(email_text: str, products_df, api_key: str) -> dict:
     import anthropic
-
     client = anthropic.Anthropic(api_key=api_key)
-    user_msg = (
-        "CENNIK (id | sekcja | nazwa | wariant druku | dostępność ceny):\n"
-        + catalog_block(products_df)
-        + "\n\n---\nZAPYTANIE KLIENTA:\n"
-        + email_text.strip()
-    )
-    resp = client.messages.create(
-        model=MODEL,
-        max_tokens=4000,
-        system=SYSTEM,
-        messages=[{"role": "user", "content": user_msg}],
-    )
+    user_msg = ("CENNIK (id | sekcja | nazwa | wariant | dostępność ceny):\n"
+                + catalog_block(products_df) + "\n\n---\nZAPYTANIE KLIENTA:\n" + email_text.strip())
+    resp = client.messages.create(model=MODEL, max_tokens=4096, system=SYSTEM,
+                                  messages=[{"role": "user", "content": user_msg}])
     text = "".join(b.text for b in resp.content if b.type == "text")
-    text = re.sub(r"^```(json)?|```$", "", text.strip(), flags=re.M).strip()
-    data = json.loads(text)
-    if "pozycje" not in data:
-        raise ValueError("Brak klucza 'pozycje' w odpowiedzi AI")
+    data = _parse_offer_json(text)
+    data.setdefault("pozycje", [])
     return data
 
 
 SYSTEM_CHAT = """Jesteś asystentem ofertowym firmy ONDRE (druk wielkoformatowy, oznakowanie, reklama).
-Prowadzisz rozmowę z handlowcem. Na podstawie cennika, treści zapytania klienta oraz wskazówek
-handlowca proponujesz pozycje oferty i pozwalasz je korygować w dialogu.
+Prowadzisz rozmowę z handlowcem i na bieżąco budujesz oraz korygujesz pozycje oferty.
 
-Handlowiec może Cię poprawiać, np.: „D-Bond przyjmij z laminatem”, „jeśli klient pisze o lakierowaniu,
-to chodzi o laminowanie”, „połącz te dwie pozycje”, „dodaj montaż”. ZAWSZE uwzględniaj te wskazówki
-w kolejnej propozycji.
+Handlowiec może Cię poprawiać, np.: „D-Bond przyjmij z laminatem”, „lakierowanie = laminowanie”,
+„połącz te dwie pozycje”, „dodaj montaż”, a także PODAWAĆ CENY, np. „150 zł za całość”,
+„po 50 zł za sztukę”, „120 za metr”. ZAWSZE uwzględniaj te wskazówki w kolejnej propozycji.
 
-Po KAŻDEJ swojej wiadomości zwracasz WYŁĄCZNIE poprawny JSON (bez markdown, bez komentarzy):
+Po KAŻDEJ wiadomości odpowiadasz WYŁĄCZNIE czystym, poprawnym JSON — bez żadnego tekstu przed
+ani po, bez znaczników ```:
 {
- "wiadomosc": "krótka odpowiedź do handlowca: przyjęte założenia oraz pytania o brakujące informacje",
+ "wiadomosc": "krótka odpowiedź do handlowca: przyjęte założenia i pytania o braki",
  "pozycje": [
    {
      "id_produktu": "P010" lub null,
-     "opis_pozycji": "opis pozycji językiem dla klienta",
+     "opis_pozycji": "opis pozycji dla klienta",
      "ilosc_szt": liczba,
-     "szerokosc_m": liczba w metrach lub null,
-     "wysokosc_m": liczba w metrach lub null,
-     "uwagi": "założenia/wątpliwości" lub "",
+     "szerokosc_m": liczba|null, "wysokosc_m": liczba|null,
+     "cena_szt": liczba|null,      // cena NETTO za sztukę, jeśli handlowiec ją podał/ustalił
+     "cena_calosc": liczba|null,   // cena NETTO łączna za CAŁĄ pozycję, jeśli podano „za całość”
+     "cena_m2": liczba|null,       // cena NETTO za m², jeśli podano
+     "uwagi": "założenia/wątpliwości"|"",
      "pewnosc": 0-1
    }
  ],
- "termin_realizacji": tekst lub null,
- "dodatkowe_informacje": tekst lub null,
- "dane_klienta": {"firma": ... , "osoba": ... , "email": ...}
+ "termin_realizacji": tekst|null, "dodatkowe_informacje": tekst|null,
+ "dane_klienta": {"firma":...|null,"osoba":...|null,"email":...|null,"telefon":...|null,"adres":...|null,"nip":...|null}
 }
 
 Zasady:
-- "pozycje" to ZAWSZE pełna, aktualna lista (nie różnice) — łatwo ją wstawić do tabeli.
-- Wymiary przeliczaj na metry. Warianty druku: 4+0 jednostronny kolor, 4+4 dwustronny,
+- "pozycje" to ZAWSZE pełna, aktualna lista (nie różnice).
+- CENY: gdy handlowiec poda cenę, wpisz ją w odpowiednie pole pozycji (cena_calosc / cena_szt / cena_m2),
+  aby trafiła do tabeli. Gdy ceny NIE podał — zostaw te pola null (aplikacja policzy z cennika).
+  Nigdy nie wstawiaj cen „z głowy”.
+- Wymiary w metrach. Warianty druku: 4+0 jednostronny kolor, 4+4 dwustronny,
   5+0/5+5 z kolorem dodatkowym; gdy klient nie precyzuje — przyjmij 4+0 i odnotuj w uwagach.
 - Produkt spoza cennika: id_produktu=null, pewnosc=0.
+- "dane_klienta": wyciągnij ze stopki maila co się da (firma, osoba, email, telefon, adres, NIP).
 - Nie wymyślaj ilości/wymiarów — gdy brak, zostaw null i dopytaj w "wiadomosc".
-- W "wiadomosc" pisz zwięźle i konkretnie, jak do współpracownika.
 """
 
 
-def chat_offer(api_messages: list, api_key: str) -> dict:
-    """api_messages: pełna historia [{role, content}] (cennik+mail w 1. wiadomości).
-    Zwraca {wiadomosc, pozycje, ...}."""
+def chat_offer(api_messages: list, api_key: str):
+    """api_messages: pełna historia [{role, content}]. Zwraca (dict, raw_text)."""
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
-    resp = client.messages.create(
-        model=MODEL, max_tokens=4000, system=SYSTEM_CHAT, messages=api_messages)
+    resp = client.messages.create(model=MODEL, max_tokens=4096, system=SYSTEM_CHAT,
+                                  messages=api_messages)
     text = "".join(b.text for b in resp.content if b.type == "text")
-    text = re.sub(r"^```(json)?|```$", "", text.strip(), flags=re.M).strip()
-    data = json.loads(text)
+    data = _parse_offer_json(text)
     data.setdefault("pozycje", [])
     data.setdefault("wiadomosc", "")
     return data, text

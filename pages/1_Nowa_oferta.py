@@ -59,18 +59,27 @@ def rows_from_pozycje(pozycje, tier, prev_df=None):
     prevmap = {}
     if prev_df is not None:
         for _, r in prev_df.iterrows():
-            prevmap.setdefault(r["Produkt"], (r["Cena/m²"], r["Cena/szt"], r["Rabat %"]))
+            prevmap.setdefault(r["Produkt"], (r["Cena/m²"], r["Cena/szt"]))
     rows = []
     for p in pozycje:
         pid = p.get("id_produktu")
         label = BY_ID.loc[pid, "label"] if (pid and pid in BY_ID.index) else OUTSIDE
-        cm2, cszt = base_prices(label, tier)
-        if label in prevmap and label != OUTSIDE:      # zachowaj ręczne korekty cen
-            pc2, pcs, _r = prevmap[label]
-            if not pd.isna(pc2):
-                cm2 = pc2
-            if cm2 is None and not pd.isna(pcs):
-                cszt = pcs
+        ilosc = p.get("ilosc_szt") or 1
+        ai_tot, ai_szt, ai_m2 = _f(p.get("cena_calosc")), _f(p.get("cena_szt")), _f(p.get("cena_m2"))
+        if ai_tot is not None and ilosc:          # cena podana w czacie ma priorytet
+            cm2, cszt = None, round(ai_tot / float(ilosc), 4)
+        elif ai_szt is not None:
+            cm2, cszt = None, ai_szt
+        elif ai_m2 is not None:
+            cm2, cszt = ai_m2, None
+        else:                                      # brak ceny od AI → cennik / korekty ręczne
+            cm2, cszt = base_prices(label, tier)
+            if label in prevmap and label != OUTSIDE:
+                pc2, pcs = prevmap[label]
+                if not pd.isna(pc2):
+                    cm2 = pc2
+                if cm2 is None and not pd.isna(pcs):
+                    cszt = pcs
         uw = (p.get("uwagi") or "").strip()
         if (p.get("pewnosc") or 0) < 0.7 and label != OUTSIDE:
             uw = ("⚠ sprawdź dopasowanie. " + uw).strip()
@@ -78,7 +87,7 @@ def rows_from_pozycje(pozycje, tier, prev_df=None):
         if uw:
             opis = (opis + "  [" + uw + "]").strip()
         rows.append({"Produkt": label, "Opis dla klienta": opis,
-                     "Ilość": p.get("ilosc_szt") or 1,
+                     "Ilość": ilosc,
                      "Szer [m]": p.get("szerokosc_m"), "Wys [m]": p.get("wysokosc_m"),
                      "Cena/m²": cm2, "Cena/szt": cszt, "Rabat %": 0,
                      "Pow [m²]": None, "Wartość": None})
@@ -186,6 +195,7 @@ with tab_man:
     c["adres"] = c1.text_input("Adres", c.get("adres", ""))
     c["email"] = c2.text_input("E-mail", c.get("email", ""))
     c["osoba"] = c1.text_input("Osoba kontaktowa", c.get("osoba", ""))
+    c["telefon"] = c2.text_input("Telefon", c.get("telefon", ""))
     ss["client"] = c
 
 tier = st.selectbox("Poziom cenowy klienta", db.TIER_NAMES, index=0, key="tier",
@@ -199,14 +209,19 @@ ss["email_text"] = st.text_area("Treść maila / zapytania", ss["email_text"], h
 
 
 def call_claude(user_content, seed=False):
+    backup_api, backup_disp = list(ss["chat_api"]), list(ss["chat_display"])
     if seed:
         ss["chat_api"] = [{"role": "user", "content": user_content}]
         ss["chat_display"] = []
     else:
         ss["chat_api"].append({"role": "user", "content": user_content})
         ss["chat_display"].append({"role": "user", "text": user_content.split("\n\n[")[0]})
-    with st.spinner("Claude pracuje…"):
-        data, raw = chat_offer(ss["chat_api"], ai_key)
+    try:
+        with st.spinner("Claude pracuje…"):
+            data, raw = chat_offer(ss["chat_api"], ai_key)
+    except Exception:
+        ss["chat_api"], ss["chat_display"] = backup_api, backup_disp   # rollback
+        raise
     ss["chat_api"].append({"role": "assistant", "content": raw})
     ss["chat_display"].append({"role": "assistant", "text": data.get("wiadomosc", "")})
     ss["items"] = recalc(rows_from_pozycje(data.get("pozycje", []), tier,
@@ -214,7 +229,8 @@ def call_claude(user_content, seed=False):
     ss["ai_meta"] = {"termin_realizacji": data.get("termin_realizacji"),
                      "dodatkowe_informacje": data.get("dodatkowe_informacje")}
     dk = data.get("dane_klienta") or {}
-    for a, b in [("firma", "nazwa"), ("osoba", "osoba"), ("email", "email")]:
+    for a, b in [("firma", "nazwa"), ("osoba", "osoba"), ("email", "email"),
+                 ("telefon", "telefon"), ("adres", "adres"), ("nip", "nip")]:
         if dk.get(a) and not ss["client"].get(b):
             ss["client"][b] = dk[a]
 
@@ -263,6 +279,17 @@ if meta.get("dodatkowe_informacje"):
     info.append("**Dodatkowo:** %s" % meta["dodatkowe_informacje"])
 if info:
     st.info("  \n".join(info))
+
+cl_sum = ss.get("client") or {}
+if any(cl_sum.get(k) for k in ("nazwa", "osoba", "email", "telefon", "nip", "adres")):
+    bits = []
+    if cl_sum.get("nazwa"):
+        bits.append("**%s**" % cl_sum["nazwa"])
+    for icon, k in [("👤", "osoba"), ("✉️", "email"), ("📞", "telefon"),
+                    ("🏷️ NIP", "nip"), ("📍", "adres")]:
+        if cl_sum.get(k):
+            bits.append("%s %s" % (icon, cl_sum[k]))
+    st.caption("Dane klienta: " + "  ·  ".join(bits))
 
 # ---------- 3. POZYCJE ----------
 st.subheader("3 · Pozycje oferty")
@@ -398,9 +425,38 @@ if st.button("📄 Generuj ofertę PDF", type="primary",
 if ss.get("last_pdf") and Path(ss["last_pdf"]).exists():
     st.download_button("⬇️ Pobierz PDF", Path(ss["last_pdf"]).read_bytes(),
                        file_name=Path(ss["last_pdf"]).name, mime="application/pdf")
-    if pd_token and ss.get("pd_deal") and st.button("📤 Załącz PDF do deala w Pipedrive"):
-        try:
-            PipedriveClient(pd_token).upload_file(ss["pd_deal"], ss["last_pdf"])
-            st.success("Plik dodany do deala #%s." % ss["pd_deal"])
-        except Exception as e:
-            st.error("Wysyłka: %s" % e)
+
+    if pd_token:
+        st.markdown("**➕ Dodaj do Pipedrive (szansa sprzedaży)**")
+        pdc2 = PipedriveClient(pd_token)
+        org_id = ss.get("client", {}).get("pipedrive_org_id")
+        if "pd_pipelines" not in ss:
+            try:
+                ss["pd_pipelines"] = pdc2.list_pipelines()
+            except Exception as e:
+                ss["pd_pipelines"] = []
+                st.caption("Nie udało się pobrać lejków: %s" % e)
+        pl_opts = {p["name"]: p["id"] for p in (ss.get("pd_pipelines") or [])}
+        cp1, cp2 = st.columns([2, 3])
+        pl_pick = cp1.selectbox("Lejek (pipeline)", list(pl_opts.keys()) or ["—"])
+        title = cp2.text_input("Tytuł szansy", "Oferta %s – %s"
+                               % (ss.get("offer_no", ""), ss["client"].get("nazwa", "")))
+        if not org_id:
+            st.caption("ℹ️ Klient nie pochodzi z Pipedrive — szansa powstanie bez powiązanej firmy "
+                       "(możesz ją podpiąć w Pipedrive po utworzeniu).")
+        bb1, bb2 = st.columns(2)
+        if ss.get("pd_deal") and bb1.button("📎 Dołącz PDF do wybranego deala #%s" % ss["pd_deal"]):
+            try:
+                pdc2.upload_file(ss["pd_deal"], ss["last_pdf"])
+                st.success("PDF dodany do deala #%s." % ss["pd_deal"])
+            except Exception as e:
+                st.error("Pipedrive: %s" % e)
+        if bb2.button("➕ Utwórz szansę i dołącz PDF", type="primary", disabled=not pl_opts):
+            try:
+                deal = pdc2.create_deal(title, value=round(net, 2), currency="PLN",
+                                        org_id=org_id, pipeline_id=pl_opts.get(pl_pick))
+                pdc2.upload_file(deal["id"], ss["last_pdf"])
+                st.success("Utworzono szansę **#%s** (%.2f zł netto) w lejku „%s” i dołączono PDF."
+                           % (deal["id"], net, pl_pick))
+            except Exception as e:
+                st.error("Pipedrive: %s" % e)

@@ -185,6 +185,8 @@ def build_offer_pdf(out_path, offer: dict, items: list, settings: dict,
         left.append("Do rąk: %s" % cl["osoba"])
     if cl.get("email"):
         left.append(cl["email"])
+    if cl.get("telefon"):
+        left.append("Tel: %s" % cl["telefon"])
 
     iss = offer.get("issuer") or {}
     right = ["<font name='%s' size='8' color='#777777'>DANE OFERTY:</font>" % F_REG,

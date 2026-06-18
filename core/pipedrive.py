@@ -53,3 +53,27 @@ class PipedriveClient:
         if not j.get("success"):
             raise RuntimeError(j.get("error") or "Błąd wysyłki pliku")
         return j["data"]
+
+    def list_pipelines(self):
+        return self._get("/pipelines") or []
+
+    def list_persons_of_org(self, org_id):
+        return self._get("/organizations/%s/persons" % org_id) or []
+
+    def create_deal(self, title, value=None, currency="PLN", org_id=None,
+                    person_id=None, pipeline_id=None):
+        data = {"title": title, "currency": currency}
+        if value is not None:
+            data["value"] = value
+        if org_id:
+            data["org_id"] = org_id
+        if person_id:
+            data["person_id"] = person_id
+        if pipeline_id:
+            data["pipeline_id"] = pipeline_id
+        r = requests.post(BASE + "/deals", params={"api_token": self.token},
+                          data=data, timeout=TIMEOUT)
+        j = r.json()
+        if not j.get("success"):
+            raise RuntimeError(j.get("error") or "Nie udało się utworzyć szansy")
+        return j["data"]
