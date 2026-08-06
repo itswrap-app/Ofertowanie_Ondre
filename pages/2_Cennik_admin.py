@@ -13,7 +13,7 @@ auth.login_gate()
 auth.require_admin()
 st.title("⚙️ Cennik — administracja")
 
-df = db.products_df()
+df = db.catalog_products()
 
 f1, f2, f3 = st.columns([2, 2, 1])
 sections = sorted(x for x in df["section"].dropna().unique())
@@ -56,9 +56,8 @@ edited = st.data_editor(
         "card_file": st.column_config.TextColumn("Karta PDF", disabled=True),
         "note": st.column_config.TextColumn("Notatka"),
         "min_price": st.column_config.NumberColumn(
-            "Min. cena/szt", format="%.2f",
-            help="Minimalna cena za sztukę — jeśli wyliczona cena jest niższa, "
-                 "oferta podbije ją do tej wartości."),
+            "Min. wartość pozycji [zł]", format="%.2f",
+            help="Minimalna wartość pozycji — jeśli policzona wartość jest niższa, oferta podbije ją do tej kwoty (niezależnie od nakładu)."),
         **{("Cena: " + t): st.column_config.NumberColumn(disabled=True, format="%.2f")
            for t, _ in db.TIERS},
     })

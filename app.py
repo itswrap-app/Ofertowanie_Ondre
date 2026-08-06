@@ -33,6 +33,11 @@ with left:
         st.page_link("pages/2_Cennik_admin.py", label="🗂️ Cennik (admin)", icon="🗂️")
         st.page_link("pages/3_Karty_produktow.py", label="📎 Karty produktowe", icon="📄")
         st.page_link("pages/5_Uzytkownicy.py", label="👥 Użytkownicy", icon="👥")
+        n_pend = db.count_pending()
+        label = "✅ Do akceptacji" + ((" (%d)" % n_pend) if n_pend else "")
+        st.page_link("pages/6_Do_akceptacji.py", label=label, icon="✅")
+        if n_pend:
+            st.warning("⚠️ %d nowych nośników czeka na Twoją akceptację." % n_pend)
 
     st.subheader("Status integracji")
     ok_ai = bool(get_secret("ANTHROPIC_API_KEY"))

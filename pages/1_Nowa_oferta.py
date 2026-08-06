@@ -23,8 +23,8 @@ CALC_COLS = ["Pow [m²]", "Wartość"]
 COLS = EDIT_COLS + CALC_COLS
 
 @st.cache_data(ttl=600, show_spinner=False)
-def _load_products():
-    return db.products_df(active_only=True)
+def _load_catalog():
+    return db.catalog_products()
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -32,9 +32,27 @@ def _load_settings():
     return db.get_settings()
 
 
-prod = _load_products()
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_client_products(client_key):
+    return db.client_products(client_key)
+
+
+def client_key_of(client):
+    if not client:
+        return None
+    if client.get("pipedrive_org_id"):
+        return "pd:%s" % client["pipedrive_org_id"]
+    nazwa = re.sub(r"\s+", " ", (client.get("nazwa") or "").strip().lower())
+    return ("nm:%s" % nazwa) if nazwa else None
+
+
+_ckey = client_key_of(st.session_state.get("client"))
+_catalog = _load_catalog()
+_cli = _load_client_products(_ckey) if _ckey else _catalog.iloc[0:0]
+prod = pd.concat([_catalog, _cli], ignore_index=True) if len(_cli) else _catalog.copy()
 prod["label"] = prod.apply(
-    lambda r: ("%s · %s %s" % (r["id"], r["name"], r["variant"] or "")).strip(), axis=1)
+    lambda r: (("%s · %s %s" % (r["id"], r["name"], r["variant"] or "")).strip()
+               + (" [klient]" if r.get("scope") == "client" else "")), axis=1)
 BY_LABEL = prod.set_index("label")
 LABELS = [OUTSIDE] + prod["label"].tolist()
 BY_ID = prod.set_index("id")
@@ -368,11 +386,14 @@ def to_items(df):
             continue
         in_cat = r["Produkt"] in BY_LABEL.index
         p = BY_LABEL.loc[r["Produkt"]] if in_cat else None
+        opis_txt = str(r["Opis dla klienta"] or "").strip()
+        if in_cat:
+            nazwa, opis_out = ("%s %s" % (p["name"], p["variant"] or "")).strip(), opis_txt
+        else:
+            nazwa, opis_out = (opis_txt or "Pozycja indywidualna"), ""
         out.append({
             "produkt_id": p["id"] if in_cat else None,
-            "nazwa": ("%s %s" % (p["name"], p["variant"] or "")).strip()
-                     if in_cat else "Pozycja indywidualna",
-            "opis": str(r["Opis dla klienta"] or "").strip(),
+            "nazwa": nazwa, "opis": opis_out,
             "ilosc": _f(r["Ilość"]), "szer": _f(r["Szer [m]"]), "wys": _f(r["Wys [m]"]),
             "cena_m2": _f(r["Cena/m²"]), "cena_szt": _f(r["Cena/szt"]),
             "pow": _f(r["Pow [m²]"]), "wartosc": _f(r["Wartość"]),
@@ -393,6 +414,82 @@ m3.metric("VAT", "%.2f zł" % vat)
 m4.metric("Brutto", "%.2f zł" % gross)
 if any(i["wartosc"] is None for i in items):
     st.warning("Pozycje bez ceny pojawią się na PDF jako „do wyceny”.")
+
+# --- zapis pozycji jako produkt (ONDRE / klienta) ---
+with st.expander("💾 Zapisz pozycję jako produkt (ONDRE lub klienta)"):
+    dfp = ss["items"].reset_index(drop=True)
+    if dfp.empty:
+        st.caption("Brak pozycji do zapisania — najpierw dodaj pozycję do tabeli.")
+    else:
+        opts = {}
+        for i, r in dfp.iterrows():
+            lbl = (str(r["Opis dla klienta"] or "").strip()
+                   or (r["Produkt"] if r["Produkt"] not in (None, OUTSIDE) else "pozycja"))
+            opts["%d. %s" % (i + 1, lbl[:60])] = i
+        pick = st.selectbox("Która pozycja?", list(opts.keys()), key="save_row_pick")
+        row = dfp.iloc[opts[pick]]
+        sc1, sc2 = st.columns(2)
+        scope = sc1.radio("Zapisz jako", ["Produkt ONDRE", "Produkt klienta"], key="save_scope")
+        cats = db.sections_list()
+        cat = sc2.selectbox("Kategoria", cats + ["➕ nowa…"], key="save_cat")
+        if cat == "➕ nowa…":
+            cat = st.text_input("Nazwa nowej kategorii", key="save_newcat").strip()
+        default_name = (str(row["Opis dla klienta"] or "").strip()[:80]
+                        or (row["Produkt"] if row["Produkt"] not in (None, OUTSIDE) else ""))
+        pname = st.text_input("Nazwa produktu", value=default_name, key="save_name")
+        unit = "m2" if _f(row["Cena/m²"]) is not None else "szt"
+        price0 = _f(row["Cena/m²"]) if unit == "m2" else _f(row["Cena/szt"])
+        cc1, cc2 = st.columns(2)
+        cprice = cc1.number_input("Cena (%s) [zł]" % ("za m²" if unit == "m2" else "za szt"),
+                                  value=float(price0 or 0), min_value=0.0, format="%.2f",
+                                  key="save_price")
+        cmin = cc2.number_input("Min. wartość pozycji [zł]", value=150.0, min_value=0.0,
+                                format="%.2f", key="save_min")
+        need_client = scope == "Produkt klienta" and not _ckey
+        if need_client:
+            st.warning("Aby zapisać produkt klienta, wybierz najpierw klienta (Pipedrive lub "
+                       "wpisz nazwę firmy ręcznie).")
+        if st.button("💾 Zapisz produkt", key="save_prod_btn",
+                     disabled=not (pname.strip() and cat and cprice > 0 and not need_client)):
+            db.create_custom_product(
+                name=pname.strip(), section=cat, unit=unit, base_cost=round(cprice, 2),
+                marks=[0, 0, 0, 0, 0], min_price=round(cmin, 2),
+                scope=("ondre" if scope == "Produkt ONDRE" else "client"),
+                client_key=(None if scope == "Produkt ONDRE" else _ckey),
+                status="active", created_by=user["name"])
+            st.cache_data.clear()
+            st.success("Zapisano „%s” jako %s." % (pname.strip(), scope.lower()))
+            st.rerun()
+
+# --- zgłoszenie nowego nośnika do akceptacji ---
+with st.expander("➕ Dodaj nowy nośnik do cennika (do akceptacji admina)"):
+    st.caption("Materiał trafia do akceptacji. Po zatwierdzeniu przez admina wejdzie do cennika na stałe.")
+    with st.form("add_material"):
+        a1, a2 = st.columns(2)
+        m_name = a1.text_input("Nazwa nośnika *")
+        cats2 = db.sections_list()
+        m_cat = a2.selectbox("Kategoria", cats2 + ["➕ nowa…"])
+        m_cat_new = st.text_input("Nowa kategoria (jeśli wybrano „nowa…”)")
+        b1, b2 = st.columns(2)
+        m_unit = b1.selectbox("Jednostka", ["m2", "szt", "mb"])
+        m_cost = b2.number_input("Koszt bazowy [zł]", min_value=0.0, format="%.2f")
+        st.caption("Narzuty per poziom — cena = koszt × (1 + narzut):")
+        mc = st.columns(5)
+        defaults = [2.5, 1.8, 1.2, 0.75, 0.6]
+        marks = [mc[i].number_input(db.TIER_NAMES[i], value=defaults[i], format="%.2f",
+                                    key="mm%d" % i) for i in range(5)]
+        m_min = st.number_input("Min. wartość pozycji [zł]", value=150.0, min_value=0.0, format="%.2f")
+        if st.form_submit_button("📨 Wyślij do akceptacji", type="primary"):
+            cat = m_cat_new.strip() if m_cat == "➕ nowa…" else m_cat
+            if not (m_name.strip() and cat):
+                st.error("Podaj nazwę i kategorię.")
+            else:
+                db.create_custom_product(
+                    name=m_name.strip(), section=cat, unit=m_unit,
+                    base_cost=round(m_cost, 2) or None, marks=[round(x, 4) for x in marks],
+                    min_price=round(m_min, 2), scope="ondre", status="pending",
+                    created_by=user["name"])
+                st.success("Wysłano „%s” do akceptacji." % m_name.strip())
 
 # ---------- 4. GENEROWANIE ----------
 st.subheader("4 · Szczegóły i PDF")

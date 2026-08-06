@@ -13,7 +13,7 @@ st.title("🔧 Ustawienia")
 # ---------------- MÓJ PROFIL (każdy użytkownik) ----------------
 st.subheader("👤 Mój profil")
 st.caption("Te dane trafiają na ofertę jako osoba kontaktowa.")
-u = db.get_user(user["id"])
+u = db.get_user(user["id"]) or user
 c1, c2 = st.columns(2)
 p_name = c1.text_input("Imię i nazwisko", u["name"])
 p_phone = c2.text_input("Telefon", u.get("phone") or "")

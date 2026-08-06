@@ -88,6 +88,8 @@ products = Table(
     Column("m_agencyjny", Float), Column("m_jedi", Float),
     Column("active", Integer, default=1), Column("card_file", String(128)),
     Column("note", Text), Column("min_price", Float),
+    Column("scope", String(16), default="ondre"), Column("client_key", String(200)),
+    Column("status", String(16), default="active"), Column("created_by", String(128)),
 )
 price_history = Table(
     "price_history", md,
@@ -149,19 +151,32 @@ def init_db():
 
 
 def _migrate():
-    """Dodaje brakujące kolumny w istniejących tabelach (SQLite/Postgres)."""
+    """Dodaje brakujące kolumny w istniejących tabelach + wypełnia domyślne."""
     from sqlalchemy import inspect, text
     eng = get_engine()
     try:
         cols = [c["name"] for c in inspect(eng).get_columns("products")]
     except Exception:
         return
-    if "min_price" not in cols:
-        try:
-            with eng.begin() as c:
-                c.execute(text("ALTER TABLE products ADD COLUMN min_price FLOAT"))
-        except Exception:
-            pass
+    new_cols = {
+        "min_price": "FLOAT", "scope": "VARCHAR(16)", "client_key": "VARCHAR(200)",
+        "status": "VARCHAR(16)", "created_by": "VARCHAR(128)",
+    }
+    for name, typ in new_cols.items():
+        if name not in cols:
+            try:
+                with eng.begin() as c:
+                    c.execute(text("ALTER TABLE products ADD COLUMN %s %s" % (name, typ)))
+            except Exception:
+                pass
+    # backfill wartości domyślnych (jednorazowo — tylko puste)
+    try:
+        with eng.begin() as c:
+            c.execute(text("UPDATE products SET scope='ondre' WHERE scope IS NULL"))
+            c.execute(text("UPDATE products SET status='active' WHERE status IS NULL"))
+            c.execute(text("UPDATE products SET min_price=150 WHERE min_price IS NULL"))
+    except Exception:
+        pass
 
 
 def is_postgres() -> bool:
@@ -182,13 +197,23 @@ def seed_if_empty() -> bool:
 
 
 def _upsert_product(conn, vals: dict):
-    pid = vals["id"]
-    exists = conn.execute(select(products.c.id).where(products.c.id == pid)).first()
-    if exists:
-        conn.execute(update(products).where(products.c.id == pid)
-                     .values({k: v for k, v in vals.items() if k != "id"}))
+    """Wstaw-lub-zaktualizuj po id (odporne na powtórny import / kolizje ID)."""
+    setvals = {k: v for k, v in vals.items() if k != "id"}
+    name = conn.dialect.name
+    if name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as _ins
+    elif name == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert as _ins
     else:
-        conn.execute(insert(products).values(**vals))
+        exists = conn.execute(select(products.c.id).where(products.c.id == vals["id"])).first()
+        if exists:
+            conn.execute(update(products).where(products.c.id == vals["id"]).values(setvals))
+        else:
+            conn.execute(insert(products).values(**vals))
+        return
+    stmt = _ins(products).values(**vals).on_conflict_do_update(
+        index_elements=["id"], set_=setvals)
+    conn.execute(stmt)
 
 
 def import_xlsx(path, user="import") -> int:
@@ -209,7 +234,8 @@ def import_xlsx(path, user="import") -> int:
             _upsert_product(c, dict(
                 id=r[0], section=r[1], name=r[2], variant=r[3], unit=r[4] or "m2",
                 base_cost=cost, m_katalog=marks[0], m_staly=marks[1], m_posrednik=marks[2],
-                m_agencyjny=marks[3], m_jedi=marks[4], active=1, card_file=card))
+                m_agencyjny=marks[3], m_jedi=marks[4], active=1, card_file=card,
+                scope="ondre", status="active", min_price=150))
             count += 1
         c.execute(insert(price_history).values(
             ts=_now(), usr=user, product_id="*", field="import_xlsx",
@@ -217,15 +243,86 @@ def import_xlsx(path, user="import") -> int:
     return count
 
 
-def products_df(active_only=False) -> pd.DataFrame:
+def products_df(active_only=False, scope=None, status=None, client_key=None) -> pd.DataFrame:
     init_db()
-    q = "SELECT id,section,name,variant,unit,base_cost,m_katalog,m_staly," \
-        "m_posrednik,m_agencyjny,m_jedi,active,card_file,note,min_price FROM products"
+    q = ("SELECT id,section,name,variant,unit,base_cost,m_katalog,m_staly,"
+         "m_posrednik,m_agencyjny,m_jedi,active,card_file,note,min_price,"
+         "scope,client_key,status,created_by FROM products")
+    conds, params = [], {}
     if active_only:
-        q += " WHERE active=1"
+        conds.append("active=1")
+    if scope is not None:
+        conds.append("scope = :scope"); params["scope"] = scope
+    if status is not None:
+        conds.append("status = :status"); params["status"] = status
+    if client_key is not None:
+        conds.append("client_key = :ck"); params["ck"] = client_key
+    if conds:
+        q += " WHERE " + " AND ".join(conds)
     q += " ORDER BY id"
     with get_engine().connect() as c:
-        return pd.read_sql_query(text(q), c)
+        return pd.read_sql_query(text(q), c, params=params)
+
+
+def catalog_products() -> pd.DataFrame:
+    """Aktywne produkty ONDRE (do cennika i wyboru w ofercie)."""
+    return products_df(active_only=True, scope="ondre", status="active")
+
+
+def client_products(client_key) -> pd.DataFrame:
+    """Aktywne produkty przypisane do danego klienta."""
+    if not client_key:
+        return products_df().iloc[0:0]
+    return products_df(status="active", scope="client", client_key=client_key)
+
+
+def pending_products() -> pd.DataFrame:
+    return products_df(status="pending")
+
+
+def count_pending() -> int:
+    init_db()
+    with get_engine().connect() as c:
+        return c.execute(select(func.count()).select_from(products)
+                         .where(products.c.status == "pending")).scalar() or 0
+
+
+def create_custom_product(name, section, unit, base_cost, marks, min_price,
+                          scope="ondre", client_key=None, status="active",
+                          created_by="", variant="") -> str:
+    """Tworzy produkt (ONDRE / klienta / oczekujący). marks: 5 narzutów."""
+    pid = next_product_id()
+    with get_engine().begin() as c:
+        c.execute(insert(products).values(
+            id=pid, section=section, name=name, variant=variant, unit=unit,
+            base_cost=base_cost, m_katalog=marks[0], m_staly=marks[1], m_posrednik=marks[2],
+            m_agencyjny=marks[3], m_jedi=marks[4], active=1, min_price=min_price,
+            scope=scope, client_key=client_key, status=status, created_by=created_by))
+        c.execute(insert(price_history).values(
+            ts=_now(), usr=created_by or "system", product_id=pid,
+            field="create_%s" % status, old_value="", new_value=name))
+    return pid
+
+
+def approve_product(pid, user="admin"):
+    with get_engine().begin() as c:
+        c.execute(update(products).where(products.c.id == pid).values(status="active"))
+        c.execute(insert(price_history).values(
+            ts=_now(), usr=user, product_id=pid, field="approve", old_value="pending",
+            new_value="active"))
+
+
+def reject_product(pid, user="admin"):
+    with get_engine().begin() as c:
+        c.execute(delete(products).where(products.c.id == pid))
+        c.execute(insert(price_history).values(
+            ts=_now(), usr=user, product_id=pid, field="reject", old_value="pending",
+            new_value="deleted"))
+
+
+def sections_list() -> list:
+    df = products_df()
+    return sorted(x for x in df["section"].dropna().unique())
 
 
 def save_products_df(df: pd.DataFrame, user="admin") -> int:

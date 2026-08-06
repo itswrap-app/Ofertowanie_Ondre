@@ -63,16 +63,17 @@ def compute_line(qty, szer, wys, cena_m2, cena_szt, rabat,
         elif not area and cena_m2 is not None and cena_szt is None:
             cena_szt = cena_m2  # cena/m² bez wymiarów traktujemy jak za sztukę
 
-    # minimalna cena za sztukę
-    if min_price and cena_szt is not None and cena_szt < min_price:
-        cena_szt = round(min_price, 2)
-        if area:
-            cena_m2 = round(cena_szt / area, 2)
-
     wartosc = (round(cena_szt * qty * (1 - rabat / 100.0), 2)
                if (cena_szt is not None and qty) else None)
+
+    # minimalna WARTOŚĆ pozycji (np. produkt nie tańszy niż 150 zł niezależnie od nakładu)
+    minimalka = False
+    if min_price and wartosc is not None and wartosc < min_price:
+        wartosc = round(float(min_price), 2)
+        minimalka = True
+
     return {"cena_m2": cena_m2, "cena_szt": cena_szt,
-            "pow": pow_total, "wartosc": wartosc}
+            "pow": pow_total, "wartosc": wartosc, "minimalka": minimalka}
 
 
 def compute_item(item: dict) -> dict:
