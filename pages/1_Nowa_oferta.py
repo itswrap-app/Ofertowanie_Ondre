@@ -381,7 +381,11 @@ if add2.button("➕ Dodaj"):
     ss["items"] = recalc(pd.concat([ss["items"], new], ignore_index=True))
     st.rerun()
 
-input_df = ss["items"].reindex(columns=COLS)
+input_df = ss["items"].reindex(columns=COLS).copy()
+for _c in ["Ilość", "Szer [m]", "Wys [m]", "Cena/m²", "Cena/szt", "Rabat %", "Wartość"]:
+    input_df[_c] = pd.to_numeric(input_df[_c], errors="coerce")
+for _c in ["Nazwa", "Opis dla klienta"]:
+    input_df[_c] = input_df[_c].fillna("").astype(str)
 edited = st.data_editor(
     input_df, num_rows="dynamic", width="stretch", key="items_editor",
     disabled=["Wartość"],
