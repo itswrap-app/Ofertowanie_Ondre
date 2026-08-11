@@ -17,9 +17,9 @@ def get_secret(name, default=""):
     return os.environ.get(name, default)
 
 
-def page_setup(title, icon="🧾"):
+def page_setup(title, icon="🧾", sidebar="auto"):
     st.set_page_config(page_title="ONDRE Oferty · %s" % title, page_icon=icon,
-                       layout="wide")
+                       layout="wide", initial_sidebar_state=sidebar)
     if LOGO.exists():
         st.sidebar.image(str(LOGO), width=150)
     st.sidebar.caption("ONDRE · generator ofert")

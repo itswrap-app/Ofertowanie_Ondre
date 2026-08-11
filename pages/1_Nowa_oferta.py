@@ -13,13 +13,13 @@ from core.pdf_offer import build_offer_pdf
 from core.pipedrive import PipedriveClient
 from core.ui import get_secret, page_setup
 
-page_setup("Nowa oferta", "🧾")
+page_setup("Nowa oferta", "🧾", sidebar="collapsed")
 user = auth.login_gate()
 
 OUTSIDE = "— pozycja spoza cennika —"
 EDIT_COLS = ["Produkt", "Nazwa", "Opis dla klienta", "Ilość", "Szer [m]", "Wys [m]",
              "Cena/m²", "Cena/szt", "Rabat %"]
-CALC_COLS = ["Pow [m²]", "Wartość"]
+CALC_COLS = ["Wartość"]
 COLS = EDIT_COLS + CALC_COLS
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -87,18 +87,54 @@ def base_prices(label, tier):
     return None, base
 
 
+def _unit_price(pid, tier):
+    """Cena za jednostkę produktu z cennika (per m² lub per szt)."""
+    if pid and pid in BY_ID.index:
+        return pricing.price_for(BY_ID.loc[pid], tier)
+    return None
+
+
 def rows_from_pozycje(pozycje, tier, prev_df=None):
     prevmap = {}
     if prev_df is not None:
         for _, r in prev_df.iterrows():
             prevmap.setdefault(r["Produkt"], (r["Cena/m²"], r["Cena/szt"]))
 
-    # 1) policz każdą pozycję (ceny z cennika/od handlowca) — montaż na razie odłóż
-    comp = []
+    rows = []
     for p in pozycje:
         pid = p.get("id_produktu")
         label = BY_ID.loc[pid, "label"] if (pid and pid in BY_ID.index) else OUTSIDE
         ilosc = p.get("ilosc_szt") or 1
+        szer, wys = p.get("szerokosc_m"), p.get("wysokosc_m")
+        dodatek_id = p.get("dodatek_id")
+        montaz = bool(p.get("montaz"))
+        opis = (p.get("opis_pozycji") or "")
+
+        # --- POZYCJA ZŁOŻONA (oklejenie): materiał bazowy + dodatek (laminat) + montaż ---
+        if pid and pid in BY_ID.index and (dodatek_id or montaz):
+            base_row = BY_ID.loc[pid]
+            base_unit = pricing.price_for(base_row, tier) or 0
+            dod_unit = (_unit_price(dodatek_id, tier) or 0) if dodatek_id else 0
+            mont_unit = 2 * base_unit if montaz else 0            # montaż = 2× folia (za jedn.)
+            rate = round(base_unit + dod_unit + mont_unit, 2)     # cena za jednostkę całości
+            czy_m2 = (base_row.get("unit") or "m2") == "m2"
+            parts = ["%s: %.2f" % (base_row["name"], base_unit)]
+            if dodatek_id and dodatek_id in BY_ID.index:
+                parts.append("%s: %.2f" % (BY_ID.loc[dodatek_id, "name"], dod_unit))
+            if montaz:
+                parts.append("montaż (2×folia): %.2f" % mont_unit)
+            jm = "m²" if czy_m2 else "szt"
+            breakdown = " + ".join(parts) + " zł/%s" % jm
+            rows.append({
+                "Produkt": OUTSIDE, "Nazwa": opis or "Oklejenie",
+                "Opis dla klienta": breakdown,
+                "Ilość": ilosc, "Szer [m]": None, "Wys [m]": None,
+                "Cena/m²": rate if czy_m2 else None,
+                "Cena/szt": None if czy_m2 else rate,
+                "Rabat %": 0, "Wartość": None})
+            continue
+
+        # --- POZYCJA ZWYKŁA ---
         ai_tot, ai_szt, ai_m2 = _f(p.get("cena_calosc")), _f(p.get("cena_szt")), _f(p.get("cena_m2"))
         if ai_tot is not None and ilosc:
             cm2, cszt = None, round(ai_tot / float(ilosc), 4)
@@ -114,61 +150,9 @@ def rows_from_pozycje(pozycje, tier, prev_df=None):
                     cm2 = pc2
                 if cm2 is None and not pd.isna(pcs):
                     cszt = pcs
-        szer, wys = p.get("szerokosc_m"), p.get("wysokosc_m")
-        rola = (p.get("rola") or "").strip().lower()
-        # składniki liczymy BEZ minimalki (minimalka dotyczy samodzielnej pozycji,
-        # nie pojedynczego składnika zestawu). Dla pozycji samodzielnych minimalkę
-        # nałoży recalc() po zbudowaniu wiersza.
-        res = pricing.compute_line(ilosc, szer, wys, cm2, cszt, 0, min_price=None) \
-            if rola != "montaz" \
-            else {"cena_m2": None, "cena_szt": None, "pow": None, "wartosc": None}
-        uw = (p.get("uwagi") or "").strip()
-        if (p.get("pewnosc") or 0) < 0.7 and label != OUTSIDE and rola != "montaz":
-            uw = ("⚠ sprawdź dopasowanie. " + uw).strip()
-        comp.append({
-            "p": p, "label": label, "ilosc": ilosc, "szer": szer, "wys": wys,
-            "cm2": res["cena_m2"], "cszt": res["cena_szt"], "wartosc": res["wartosc"],
-            "opis": (p.get("opis_pozycji") or ""), "uw": uw,
-            "grupa": (p.get("grupa") or None), "rola": rola})
-
-    # 2) montaż = 2× wartość folii w tej samej grupie (lub 2× suma materiałów grupy)
-    for c in comp:
-        if c["rola"] == "montaz":
-            grp = [x for x in comp if x["grupa"] == c["grupa"] and x is not c] if c["grupa"] \
-                else [x for x in comp if x is not c and x["rola"] in ("folia", "laminat")]
-            folia = [x for x in grp if x["rola"] == "folia"]
-            base = sum((x["wartosc"] or 0) for x in (folia or grp))
-            c["wartosc"] = round(2 * base, 2)
-            c["cszt"], c["cm2"] = c["wartosc"], None
-            c["ilosc"] = 1
-
-    # 3) łącz grupy w jeden wiersz; pozycje bez grupy zostają osobno
-    rows, done = [], set()
-    for c in comp:
-        g = c["grupa"]
-        if g:
-            if g in done:
-                continue
-            done.add(g)
-            members = [x for x in comp if x["grupa"] == g]
-            total = round(sum((m["wartosc"] or 0) for m in members), 2)
-            parts = []
-            for m in members:
-                nm = (m["opis"] or m["label"]).split("[")[0].strip()[:40]
-                parts.append("%s: %.2f zł" % (nm, m["wartosc"] or 0))
-            rows.append({"Produkt": OUTSIDE, "Nazwa": g,
-                         "Opis dla klienta": "; ".join(parts),
-                         "Ilość": 1, "Szer [m]": None, "Wys [m]": None,
-                         "Cena/m²": None, "Cena/szt": total, "Rabat %": 0,
-                         "Pow [m²]": None, "Wartość": total})
-        else:
-            opis = c["opis"]
-            if c["uw"]:
-                opis = (opis + "  [" + c["uw"] + "]").strip()
-            rows.append({"Produkt": c["label"], "Nazwa": "", "Opis dla klienta": opis,
-                         "Ilość": c["ilosc"], "Szer [m]": c["szer"], "Wys [m]": c["wys"],
-                         "Cena/m²": c["cm2"], "Cena/szt": c["cszt"], "Rabat %": 0,
-                         "Pow [m²]": None, "Wartość": None})
+        rows.append({"Produkt": label, "Nazwa": "", "Opis dla klienta": opis,
+                     "Ilość": ilosc, "Szer [m]": szer, "Wys [m]": wys,
+                     "Cena/m²": cm2, "Cena/szt": cszt, "Rabat %": 0, "Wartość": None})
     return pd.DataFrame(rows, columns=COLS)
 
 
@@ -189,7 +173,6 @@ def recalc(df, prev=None):
                                    min_price=minp, driver=driver)
         df.at[idx, "Cena/m²"] = res["cena_m2"]
         df.at[idx, "Cena/szt"] = res["cena_szt"]
-        df.at[idx, "Pow [m²]"] = res["pow"]
         df.at[idx, "Wartość"] = res["wartosc"]
     return df
 
@@ -394,19 +377,19 @@ if add2.button("➕ Dodaj"):
     cm2, cszt = base_prices(quick, tier)
     new = pd.DataFrame([{"Produkt": quick, "Nazwa": "", "Opis dla klienta": "", "Ilość": 1,
                          "Szer [m]": None, "Wys [m]": None, "Cena/m²": cm2,
-                         "Cena/szt": cszt, "Rabat %": 0, "Pow [m²]": None, "Wartość": None}])
+                         "Cena/szt": cszt, "Rabat %": 0, "Wartość": None}])
     ss["items"] = recalc(pd.concat([ss["items"], new], ignore_index=True))
     st.rerun()
 
 input_df = ss["items"].reindex(columns=COLS)
 edited = st.data_editor(
     input_df, num_rows="dynamic", width="stretch", key="items_editor",
-    disabled=["Pow [m²]", "Wartość"],
+    disabled=["Wartość"],
     column_config={
-        "Produkt": st.column_config.SelectboxColumn(options=LABELS, width="medium"),
+        "Produkt": st.column_config.SelectboxColumn(options=LABELS, width="small"),
         "Nazwa": st.column_config.TextColumn(width="medium",
                  help="Nazwa pozycji na ofercie. Pusta = nazwa z cennika. Możesz wpisać własną."),
-        "Opis dla klienta": st.column_config.TextColumn(width="large"),
+        "Opis dla klienta": st.column_config.TextColumn(width="large"),  # przeciągnij, by poszerzyć
         "Ilość": st.column_config.NumberColumn(min_value=0, step=1, format="%d"),
         "Szer [m]": st.column_config.NumberColumn(min_value=0.0, format="%.2f"),
         "Wys [m]": st.column_config.NumberColumn(min_value=0.0, format="%.2f"),
@@ -416,7 +399,6 @@ edited = st.data_editor(
                                                   help="Cena za sztukę (liczy się z ceny/m², "
                                                        "lub wpisz wprost dla pozycji od sztuki)."),
         "Rabat %": st.column_config.NumberColumn(min_value=0, max_value=100, step=1, format="%d"),
-        "Pow [m²]": st.column_config.NumberColumn(format="%.3f", help="Powierzchnia łączna."),
         "Wartość": st.column_config.NumberColumn(format="%.2f zł", help="Wartość netto pozycji."),
     })
 recalced = recalc(edited, input_df)
@@ -426,7 +408,7 @@ ss["items"] = recalced
 def _same_calc(a, b):
     if len(a) != len(b):
         return False
-    for col in ["Cena/m²", "Cena/szt", "Pow [m²]", "Wartość"]:
+    for col in ["Cena/m²", "Cena/szt", "Wartość"]:
         for i in a.index:
             if i not in b.index or not _eq(a.at[i, col], b.at[i, col]):
                 return False
@@ -479,7 +461,7 @@ def to_items(df):
             "nazwa": nazwa, "opis": opis_out,
             "ilosc": _f(r["Ilość"]), "szer": _f(r["Szer [m]"]), "wys": _f(r["Wys [m]"]),
             "cena_m2": _f(r["Cena/m²"]), "cena_szt": _f(r["Cena/szt"]),
-            "pow": _f(r["Pow [m²]"]), "wartosc": _f(r["Wartość"]),
+            "pow": None, "wartosc": _f(r["Wartość"]),
             "rabat": _f(r["Rabat %"]) or 0,
             "card_file": p["card_file"] if in_cat else None,
             "unit": p["unit"] if in_cat else "m2",

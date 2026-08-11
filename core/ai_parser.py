@@ -73,9 +73,8 @@ ani po, bez znaczników ```:
      "cena_szt": liczba|null,      // cena NETTO za sztukę, jeśli handlowiec ją podał/ustalił
      "cena_calosc": liczba|null,   // cena NETTO łączna za CAŁĄ pozycję, jeśli podano „za całość”
      "cena_m2": liczba|null,       // cena NETTO za m², jeśli podano
-     "grupa": tekst|null,          // etykieta zestawu, np. „Oklejenie witryn" — pozycje z tą samą
-                                    // grupą aplikacja połączy w JEDEN wiersz i zsumuje
-     "rola": "folia"|"laminat"|"montaz"|null,  // rola w zestawie (do policzenia montażu)
+     "dodatek_id": "P129"|null,    // id produktu doliczanego per jednostkę (np. laminat do folii)
+     "montaz": true|false,         // czy doliczyć montaż = 2× cena materiału bazowego (folii)
      "uwagi": "założenia/wątpliwości"|"",
      "pewnosc": 0-1
    }
@@ -91,11 +90,12 @@ Zasady:
   aplikacja policzy z cennika. Ceny wpisuj TYLKO gdy handlowiec sam podał cenę. Nie licz „z głowy”.
 - MATERIAŁY OD m² podane jako łączny metraż BEZ wymiarów (np. „8 m²"): wpisz metraż w ilosc_szt,
   a szerokosc_m/wysokosc_m zostaw null (aplikacja pomnoży cena/m² × metraż).
-- POZYCJE ZŁOŻONE (np. oklejenie witryn = folia + laminat + montaż): zwróć składniki jako OSOBNE
-  pozycje, każda z TĄ SAMĄ wartością "grupa" (np. „Oklejenie witryn 8 m²") i właściwą "rola"
-  ("folia"/"laminat"/"montaz"). Montaż: osobna pozycja rola="montaz", BEZ ceny i bez ilości/wymiarów.
-  NIE licz sam montażu ani sumy — aplikacja policzy montaż = 2× wartość folii i połączy grupę
-  w jeden wiersz. Rozbijaj (bez grupy) tylko gdy handlowiec wyraźnie poprosi („rozbij osobno").
+- OKLEJENIE / pozycja złożona (folia + laminat + montaż): zwróć JEDNĄ pozycję:
+  id_produktu = FOLIA (materiał bazowy z cennika), ilosc_szt = metraż w m²,
+  dodatek_id = id LAMINATU (jeśli ma być laminat, inaczej null), montaz = true (jeśli z montażem).
+  NIE licz sam ceny — zostaw cena_* = null. Aplikacja policzy cenę za m² całości
+  (folia + laminat + montaż 2×folia) i pomnoży przez metraż. Rozbijaj na osobne pozycje TYLKO gdy
+  handlowiec wyraźnie poprosi („rozbij osobno") — wtedy osobno folia, osobno laminat.
 - Wymiary w metrach. Warianty druku: 4+0 jednostronny kolor, 4+4 dwustronny,
   5+0/5+5 z kolorem dodatkowym; gdy klient nie precyzuje — przyjmij 4+0 i odnotuj w uwagach.
 - Produkt spoza cennika: id_produktu=null, pewnosc=0.
