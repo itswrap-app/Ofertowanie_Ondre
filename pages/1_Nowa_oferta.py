@@ -50,8 +50,12 @@ _ckey = client_key_of(st.session_state.get("client"))
 _catalog = _load_catalog()
 _cli = _load_client_products(_ckey) if _ckey else _catalog.iloc[0:0]
 prod = pd.concat([_catalog, _cli], ignore_index=True) if len(_cli) else _catalog.copy()
+def _vv(x):
+    return "" if pd.isna(x) else str(x)
+
+
 prod["label"] = prod.apply(
-    lambda r: (("%s · %s %s" % (r["id"], r["name"], r["variant"] or "")).strip()
+    lambda r: (("%s · %s %s" % (r["id"], r["name"], _vv(r["variant"]))).strip()
                + (" [klient]" if r.get("scope") == "client" else "")), axis=1)
 BY_LABEL = prod.set_index("label")
 LABELS = [OUTSIDE] + prod["label"].tolist()
@@ -88,19 +92,21 @@ def rows_from_pozycje(pozycje, tier, prev_df=None):
     if prev_df is not None:
         for _, r in prev_df.iterrows():
             prevmap.setdefault(r["Produkt"], (r["Cena/m²"], r["Cena/szt"]))
-    rows = []
+
+    # 1) policz każdą pozycję (ceny z cennika/od handlowca) — montaż na razie odłóż
+    comp = []
     for p in pozycje:
         pid = p.get("id_produktu")
         label = BY_ID.loc[pid, "label"] if (pid and pid in BY_ID.index) else OUTSIDE
         ilosc = p.get("ilosc_szt") or 1
         ai_tot, ai_szt, ai_m2 = _f(p.get("cena_calosc")), _f(p.get("cena_szt")), _f(p.get("cena_m2"))
-        if ai_tot is not None and ilosc:          # cena podana w czacie ma priorytet
+        if ai_tot is not None and ilosc:
             cm2, cszt = None, round(ai_tot / float(ilosc), 4)
         elif ai_szt is not None:
             cm2, cszt = None, ai_szt
         elif ai_m2 is not None:
             cm2, cszt = ai_m2, None
-        else:                                      # brak ceny od AI → cennik / korekty ręczne
+        else:
             cm2, cszt = base_prices(label, tier)
             if label in prevmap and label != OUTSIDE:
                 pc2, pcs = prevmap[label]
@@ -108,17 +114,60 @@ def rows_from_pozycje(pozycje, tier, prev_df=None):
                     cm2 = pc2
                 if cm2 is None and not pd.isna(pcs):
                     cszt = pcs
+        szer, wys = p.get("szerokosc_m"), p.get("wysokosc_m")
+        rola = (p.get("rola") or "").strip().lower()
+        # składniki liczymy BEZ minimalki (minimalka dotyczy samodzielnej pozycji,
+        # nie pojedynczego składnika zestawu). Dla pozycji samodzielnych minimalkę
+        # nałoży recalc() po zbudowaniu wiersza.
+        res = pricing.compute_line(ilosc, szer, wys, cm2, cszt, 0, min_price=None) \
+            if rola != "montaz" \
+            else {"cena_m2": None, "cena_szt": None, "pow": None, "wartosc": None}
         uw = (p.get("uwagi") or "").strip()
-        if (p.get("pewnosc") or 0) < 0.7 and label != OUTSIDE:
+        if (p.get("pewnosc") or 0) < 0.7 and label != OUTSIDE and rola != "montaz":
             uw = ("⚠ sprawdź dopasowanie. " + uw).strip()
-        opis = (p.get("opis_pozycji") or "")
-        if uw:
-            opis = (opis + "  [" + uw + "]").strip()
-        rows.append({"Produkt": label, "Opis dla klienta": opis,
-                     "Ilość": ilosc,
-                     "Szer [m]": p.get("szerokosc_m"), "Wys [m]": p.get("wysokosc_m"),
-                     "Cena/m²": cm2, "Cena/szt": cszt, "Rabat %": 0,
-                     "Pow [m²]": None, "Wartość": None})
+        comp.append({
+            "p": p, "label": label, "ilosc": ilosc, "szer": szer, "wys": wys,
+            "cm2": res["cena_m2"], "cszt": res["cena_szt"], "wartosc": res["wartosc"],
+            "opis": (p.get("opis_pozycji") or ""), "uw": uw,
+            "grupa": (p.get("grupa") or None), "rola": rola})
+
+    # 2) montaż = 2× wartość folii w tej samej grupie (lub 2× suma materiałów grupy)
+    for c in comp:
+        if c["rola"] == "montaz":
+            grp = [x for x in comp if x["grupa"] == c["grupa"] and x is not c] if c["grupa"] \
+                else [x for x in comp if x is not c and x["rola"] in ("folia", "laminat")]
+            folia = [x for x in grp if x["rola"] == "folia"]
+            base = sum((x["wartosc"] or 0) for x in (folia or grp))
+            c["wartosc"] = round(2 * base, 2)
+            c["cszt"], c["cm2"] = c["wartosc"], None
+            c["ilosc"] = 1
+
+    # 3) łącz grupy w jeden wiersz; pozycje bez grupy zostają osobno
+    rows, done = [], set()
+    for c in comp:
+        g = c["grupa"]
+        if g:
+            if g in done:
+                continue
+            done.add(g)
+            members = [x for x in comp if x["grupa"] == g]
+            total = round(sum((m["wartosc"] or 0) for m in members), 2)
+            parts = []
+            for m in members:
+                nm = (m["opis"] or m["label"]).split("[")[0].strip()[:40]
+                parts.append("%s: %.2f zł" % (nm, m["wartosc"] or 0))
+            rows.append({"Produkt": OUTSIDE, "Opis dla klienta": "%s [%s]" % (g, "; ".join(parts)),
+                         "Ilość": 1, "Szer [m]": None, "Wys [m]": None,
+                         "Cena/m²": None, "Cena/szt": total, "Rabat %": 0,
+                         "Pow [m²]": None, "Wartość": total})
+        else:
+            opis = c["opis"]
+            if c["uw"]:
+                opis = (opis + "  [" + c["uw"] + "]").strip()
+            rows.append({"Produkt": c["label"], "Opis dla klienta": opis,
+                         "Ilość": c["ilosc"], "Szer [m]": c["szer"], "Wys [m]": c["wys"],
+                         "Cena/m²": c["cm2"], "Cena/szt": c["cszt"], "Rabat %": 0,
+                         "Pow [m²]": None, "Wartość": None})
     return pd.DataFrame(rows, columns=COLS)
 
 
@@ -142,6 +191,16 @@ def recalc(df, prev=None):
         df.at[idx, "Pow [m²]"] = res["pow"]
         df.at[idx, "Wartość"] = res["wartosc"]
     return df
+
+
+def catalog_for_chat(df, tier):
+    lines = []
+    for _, r in df.iterrows():
+        price = pricing.price_for(r, tier)
+        pstr = ("%.2f zł/%s" % (price, r["unit"])) if price is not None else "wycena indywidualna"
+        lines.append("%s | %s | %s %s | jedn:%s | cena %s: %s" % (
+            r["id"], r["section"], r["name"], _vv(r["variant"]), r["unit"], tier, pstr))
+    return "\n".join(lines)
 
 
 ss = st.session_state
@@ -269,8 +328,9 @@ def call_claude(user_content, seed=False):
 col_a, col_b = st.columns([1, 2])
 if col_a.button("▶️ Przeanalizuj i rozpocznij czat", type="primary",
                 disabled=not (ai_key and ss["email_text"].strip())):
-    content = ("CENNIK (id | sekcja | nazwa | wariant | dostępność ceny):\n"
-               + catalog_block(prod) + "\n\n---\nZAPYTANIE KLIENTA:\n" + ss["email_text"].strip())
+    content = ("CENNIK (id | kategoria | nazwa | jednostka | cena dla poziomu klienta):\n"
+               + catalog_for_chat(prod, tier) + "\n\n---\nZAPYTANIE KLIENTA:\n"
+               + ss["email_text"].strip())
     try:
         call_claude(content, seed=True)
         st.rerun()
@@ -388,7 +448,7 @@ def to_items(df):
         p = BY_LABEL.loc[r["Produkt"]] if in_cat else None
         opis_txt = str(r["Opis dla klienta"] or "").strip()
         if in_cat:
-            nazwa, opis_out = ("%s %s" % (p["name"], p["variant"] or "")).strip(), opis_txt
+            nazwa, opis_out = ("%s %s" % (p["name"], _vv(p["variant"]))).strip(), opis_txt
         else:
             nazwa, opis_out = (opis_txt or "Pozycja indywidualna"), ""
         out.append({

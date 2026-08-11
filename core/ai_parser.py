@@ -18,7 +18,8 @@ def catalog_block(df) -> str:
     lines = []
     for _, r in df.iterrows():
         price = "IND" if r.get("base_cost") in (None, 0) or str(r.get("base_cost")) == "nan" else "OK"
-        lines.append(f"{r['id']} | {r['section']} | {r['name']} | {r['variant'] or '-'} | cena:{price}")
+        var = r["variant"] if isinstance(r.get("variant"), str) and r["variant"].strip() else "-"
+        lines.append(f"{r['id']} | {r['section']} | {r['name']} | {var} | cena:{price}")
     return "\n".join(lines)
 
 
@@ -72,6 +73,9 @@ ani po, bez znaczników ```:
      "cena_szt": liczba|null,      // cena NETTO za sztukę, jeśli handlowiec ją podał/ustalił
      "cena_calosc": liczba|null,   // cena NETTO łączna za CAŁĄ pozycję, jeśli podano „za całość”
      "cena_m2": liczba|null,       // cena NETTO za m², jeśli podano
+     "grupa": tekst|null,          // etykieta zestawu, np. „Oklejenie witryn" — pozycje z tą samą
+                                    // grupą aplikacja połączy w JEDEN wiersz i zsumuje
+     "rola": "folia"|"laminat"|"montaz"|null,  // rola w zestawie (do policzenia montażu)
      "uwagi": "założenia/wątpliwości"|"",
      "pewnosc": 0-1
    }
@@ -82,9 +86,16 @@ ani po, bez znaczników ```:
 
 Zasady:
 - "pozycje" to ZAWSZE pełna, aktualna lista (nie różnice).
-- CENY: gdy handlowiec poda cenę, wpisz ją w odpowiednie pole pozycji (cena_calosc / cena_szt / cena_m2),
-  aby trafiła do tabeli. Gdy ceny NIE podał — zostaw te pola null (aplikacja policzy z cennika).
-  Nigdy nie wstawiaj cen „z głowy”.
+- Cennik podaje JEDNOSTKĘ i CENĘ za jednostkę dla poziomu klienta (do orientacji).
+- ZWYKŁE pojedyncze pozycje z cennika: NIE wpisuj cen — zostaw cena_szt/cena_calosc/cena_m2 = null,
+  aplikacja policzy z cennika. Ceny wpisuj TYLKO gdy handlowiec sam podał cenę. Nie licz „z głowy”.
+- MATERIAŁY OD m² podane jako łączny metraż BEZ wymiarów (np. „8 m²"): wpisz metraż w ilosc_szt,
+  a szerokosc_m/wysokosc_m zostaw null (aplikacja pomnoży cena/m² × metraż).
+- POZYCJE ZŁOŻONE (np. oklejenie witryn = folia + laminat + montaż): zwróć składniki jako OSOBNE
+  pozycje, każda z TĄ SAMĄ wartością "grupa" (np. „Oklejenie witryn 8 m²") i właściwą "rola"
+  ("folia"/"laminat"/"montaz"). Montaż: osobna pozycja rola="montaz", BEZ ceny i bez ilości/wymiarów.
+  NIE licz sam montażu ani sumy — aplikacja policzy montaż = 2× wartość folii i połączy grupę
+  w jeden wiersz. Rozbijaj (bez grupy) tylko gdy handlowiec wyraźnie poprosi („rozbij osobno").
 - Wymiary w metrach. Warianty druku: 4+0 jednostronny kolor, 4+4 dwustronny,
   5+0/5+5 z kolorem dodatkowym; gdy klient nie precyzuje — przyjmij 4+0 i odnotuj w uwagach.
 - Produkt spoza cennika: id_produktu=null, pewnosc=0.
