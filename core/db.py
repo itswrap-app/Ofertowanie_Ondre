@@ -123,7 +123,7 @@ users = Table(
     Column("email", String(160), unique=True), Column("name", String(128)),
     Column("phone", String(48)), Column("password_hash", Text),
     Column("role", String(16), default="handlowiec"), Column("active", Integer, default=1),
-    Column("created_ts", String(32)),
+    Column("created_ts", String(32)), Column("pipedrive_token", Text),
 )
 
 
@@ -175,6 +175,14 @@ def _migrate():
             c.execute(text("UPDATE products SET scope='ondre' WHERE scope IS NULL"))
             c.execute(text("UPDATE products SET status='active' WHERE status IS NULL"))
             c.execute(text("UPDATE products SET min_price=150 WHERE min_price IS NULL"))
+    except Exception:
+        pass
+    # kolumny w tabeli users
+    try:
+        ucols = [c["name"] for c in inspect(eng).get_columns("users")]
+        if "pipedrive_token" not in ucols:
+            with eng.begin() as c:
+                c.execute(text("ALTER TABLE users ADD COLUMN pipedrive_token TEXT"))
     except Exception:
         pass
 
@@ -505,12 +513,14 @@ def get_user(uid: int):
     return dict(row._mapping) if row else None
 
 
-def create_user(email, name, phone, password_hash, role="handlowiec") -> int:
+def create_user(email, name, phone, password_hash, role="handlowiec",
+                pipedrive_token=None) -> int:
     init_db()
     with get_engine().begin() as c:
         res = c.execute(insert(users).values(
             email=email.strip(), name=name.strip(), phone=(phone or "").strip(),
-            password_hash=password_hash, role=role, active=1, created_ts=_now()))
+            password_hash=password_hash, role=role, active=1, created_ts=_now(),
+            pipedrive_token=(pipedrive_token or None)))
         pk = res.inserted_primary_key
         return pk[0] if pk else 0
 

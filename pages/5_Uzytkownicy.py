@@ -28,6 +28,8 @@ with st.form("add_user"):
     role = c2.selectbox("Rola", auth.ROLES, index=1)
     p1 = c1.text_input("Hasło startowe *", type="password")
     p2 = c2.text_input("Powtórz hasło *", type="password")
+    pd_tok = st.text_input("Token Pipedrive (opcjonalnie)", type="password",
+                           help="Osobisty token API Pipedrive tego użytkownika.")
     submitted = st.form_submit_button("Utwórz konto", type="primary")
 if submitted:
     if not (name.strip() and email.strip() and p1):
@@ -39,7 +41,8 @@ if submitted:
     elif len(p1) < 8:
         st.error("Hasło powinno mieć min. 8 znaków.")
     else:
-        db.create_user(email, name, phone, auth.hash_pw(p1), role=role)
+        db.create_user(email, name, phone, auth.hash_pw(p1), role=role,
+                       pipedrive_token=pd_tok.strip() or None)
         st.success("Utworzono konto dla %s. Przekaż hasło startowe — użytkownik zmieni je w „Mój profil”." % name)
         st.rerun()
 
@@ -64,6 +67,21 @@ if c3.button("💾 Zapisz zmiany"):
         db.update_user(uid, role=new_role, active=1 if new_active == "aktywny" else 0)
         st.success("Zaktualizowano konto.")
         st.rerun()
+
+with st.expander("🔗 Token Pipedrive użytkownika"):
+    tok_val = st.text_input("Token Pipedrive", target.get("pipedrive_token") or "",
+                            type="password", key="edit_pd_tok")
+    et1, et2 = st.columns(2)
+    if et1.button("💾 Zapisz token"):
+        db.update_user(uid, pipedrive_token=tok_val.strip() or None)
+        st.success("Zapisano token Pipedrive użytkownika.")
+    if et2.button("🔌 Testuj") and tok_val.strip():
+        try:
+            from core.pipedrive import PipedriveClient
+            nm, comp = PipedriveClient(tok_val.strip()).test()
+            st.success("Połączono: %s (%s)" % (nm, comp))
+        except Exception as e:
+            st.error("Błąd: %s" % e)
 
 with st.expander("🔑 Resetuj hasło użytkownika"):
     with st.form("reset_pw"):

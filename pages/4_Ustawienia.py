@@ -42,6 +42,24 @@ with st.expander("🔑 Zmień hasło"):
                 db.update_user(user["id"], password_hash=auth.hash_pw(n1))
                 st.success("Hasło zmienione.")
 
+with st.expander("🔗 Mój token Pipedrive"):
+    st.caption("Twój osobisty token API Pipedrive — dzięki niemu oferta korzysta z Twojego "
+               "konta (Twoi klienci, deale, maile). Pipedrive → Ustawienia → Personal "
+               "preferences → API.")
+    cur_tok = (u.get("pipedrive_token") or "")
+    new_tok = st.text_input("Token Pipedrive", cur_tok, type="password", key="my_pd_tok")
+    cta, ctb = st.columns(2)
+    if cta.button("💾 Zapisz token"):
+        db.update_user(user["id"], pipedrive_token=new_tok.strip() or None)
+        st.session_state["user"]["pipedrive_token"] = new_tok.strip()
+        st.success("Zapisano token.")
+    if ctb.button("🔌 Testuj połączenie") and new_tok.strip():
+        try:
+            name, company = PipedriveClient(new_tok.strip()).test()
+            st.success("Połączono: %s (%s)" % (name, company))
+        except Exception as e:
+            st.error("Błąd: %s" % e)
+
 # ---------------- DANE FIRMY + INTEGRACJE (admin) ----------------
 if not auth.is_admin():
     st.info("Dane firmy, parametry oferty i integracje może zmieniać administrator.")

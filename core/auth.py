@@ -72,7 +72,8 @@ def _login_form():
         else:
             st.session_state["user"] = {
                 "id": u["id"], "email": u["email"], "name": u["name"],
-                "phone": u.get("phone") or "", "role": u["role"]}
+                "phone": u.get("phone") or "", "role": u["role"],
+                "pipedrive_token": u.get("pipedrive_token") or ""}
             st.rerun()
     st.stop()
 

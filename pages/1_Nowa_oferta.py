@@ -158,7 +158,7 @@ st.title("🧾 Nowa oferta")
 # ---------- 1. KLIENT ----------
 st.subheader("1 · Klient")
 tab_pd, tab_man = st.tabs(["🔌 Z Pipedrive", "✍️ Ręcznie"])
-pd_token = get_secret("PIPEDRIVE_API_TOKEN")
+pd_token = (user.get("pipedrive_token") or "").strip() or get_secret("PIPEDRIVE_API_TOKEN")
 with tab_pd:
     if not pd_token:
         st.info("Skonfiguruj PIPEDRIVE_API_TOKEN w Ustawieniach, aby wyszukiwać klientów.")
