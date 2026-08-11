@@ -17,7 +17,7 @@ page_setup("Nowa oferta", "🧾")
 user = auth.login_gate()
 
 OUTSIDE = "— pozycja spoza cennika —"
-EDIT_COLS = ["Produkt", "Opis dla klienta", "Ilość", "Szer [m]", "Wys [m]",
+EDIT_COLS = ["Produkt", "Nazwa", "Opis dla klienta", "Ilość", "Szer [m]", "Wys [m]",
              "Cena/m²", "Cena/szt", "Rabat %"]
 CALC_COLS = ["Pow [m²]", "Wartość"]
 COLS = EDIT_COLS + CALC_COLS
@@ -156,7 +156,8 @@ def rows_from_pozycje(pozycje, tier, prev_df=None):
             for m in members:
                 nm = (m["opis"] or m["label"]).split("[")[0].strip()[:40]
                 parts.append("%s: %.2f zł" % (nm, m["wartosc"] or 0))
-            rows.append({"Produkt": OUTSIDE, "Opis dla klienta": "%s [%s]" % (g, "; ".join(parts)),
+            rows.append({"Produkt": OUTSIDE, "Nazwa": g,
+                         "Opis dla klienta": "; ".join(parts),
                          "Ilość": 1, "Szer [m]": None, "Wys [m]": None,
                          "Cena/m²": None, "Cena/szt": total, "Rabat %": 0,
                          "Pow [m²]": None, "Wartość": total})
@@ -164,7 +165,7 @@ def rows_from_pozycje(pozycje, tier, prev_df=None):
             opis = c["opis"]
             if c["uw"]:
                 opis = (opis + "  [" + c["uw"] + "]").strip()
-            rows.append({"Produkt": c["label"], "Opis dla klienta": opis,
+            rows.append({"Produkt": c["label"], "Nazwa": "", "Opis dla klienta": opis,
                          "Ilość": c["ilosc"], "Szer [m]": c["szer"], "Wys [m]": c["wys"],
                          "Cena/m²": c["cm2"], "Cena/szt": c["cszt"], "Rabat %": 0,
                          "Pow [m²]": None, "Wartość": None})
@@ -391,7 +392,7 @@ add1, add2 = st.columns([4, 1])
 quick = add1.selectbox("Dodaj pozycję z cennika", LABELS, key="quick_add")
 if add2.button("➕ Dodaj"):
     cm2, cszt = base_prices(quick, tier)
-    new = pd.DataFrame([{"Produkt": quick, "Opis dla klienta": "", "Ilość": 1,
+    new = pd.DataFrame([{"Produkt": quick, "Nazwa": "", "Opis dla klienta": "", "Ilość": 1,
                          "Szer [m]": None, "Wys [m]": None, "Cena/m²": cm2,
                          "Cena/szt": cszt, "Rabat %": 0, "Pow [m²]": None, "Wartość": None}])
     ss["items"] = recalc(pd.concat([ss["items"], new], ignore_index=True))
@@ -402,7 +403,9 @@ edited = st.data_editor(
     input_df, num_rows="dynamic", width="stretch", key="items_editor",
     disabled=["Pow [m²]", "Wartość"],
     column_config={
-        "Produkt": st.column_config.SelectboxColumn(options=LABELS, width="large"),
+        "Produkt": st.column_config.SelectboxColumn(options=LABELS, width="medium"),
+        "Nazwa": st.column_config.TextColumn(width="medium",
+                 help="Nazwa pozycji na ofercie. Pusta = nazwa z cennika. Możesz wpisać własną."),
         "Opis dla klienta": st.column_config.TextColumn(width="large"),
         "Ilość": st.column_config.NumberColumn(min_value=0, step=1, format="%d"),
         "Szer [m]": st.column_config.NumberColumn(min_value=0.0, format="%.2f"),
@@ -418,6 +421,22 @@ edited = st.data_editor(
     })
 recalced = recalc(edited, input_df)
 ss["items"] = recalced
+
+
+def _same_calc(a, b):
+    if len(a) != len(b):
+        return False
+    for col in ["Cena/m²", "Cena/szt", "Pow [m²]", "Wartość"]:
+        for i in a.index:
+            if i not in b.index or not _eq(a.at[i, col], b.at[i, col]):
+                return False
+    return True
+
+
+# odśwież tabelę, gdy przeliczenie zmieniło kolumny wyliczane (Wartość/Pow itd.),
+# żeby w tabeli nie została stara wartość po edycji ilości/ceny
+if not _same_calc(recalced, edited):
+    st.rerun()
 
 b1, b2, _sp = st.columns([1.5, 1.8, 3])
 if b1.button("↺ Uzupełnij puste ceny"):
@@ -442,15 +461,19 @@ def to_items(df):
     for _, r in df.iterrows():
         empty = (r["Produkt"] in (None, OUTSIDE) or pd.isna(r["Produkt"]))
         if empty and not str(r["Opis dla klienta"] or "").strip() \
+                and not str(r.get("Nazwa") or "").strip() \
                 and pd.isna(r["Cena/szt"]) and pd.isna(r["Cena/m²"]):
             continue
         in_cat = r["Produkt"] in BY_LABEL.index
         p = BY_LABEL.loc[r["Produkt"]] if in_cat else None
+        name_txt = str(r.get("Nazwa") or "").strip()
         opis_txt = str(r["Opis dla klienta"] or "").strip()
         if in_cat:
-            nazwa, opis_out = ("%s %s" % (p["name"], _vv(p["variant"]))).strip(), opis_txt
+            nazwa = name_txt or ("%s %s" % (p["name"], _vv(p["variant"]))).strip()
+            opis_out = opis_txt
         else:
-            nazwa, opis_out = (opis_txt or "Pozycja indywidualna"), ""
+            nazwa = name_txt or opis_txt or "Pozycja indywidualna"
+            opis_out = opis_txt if name_txt else ""
         out.append({
             "produkt_id": p["id"] if in_cat else None,
             "nazwa": nazwa, "opis": opis_out,
@@ -483,7 +506,7 @@ with st.expander("💾 Zapisz pozycję jako produkt (ONDRE lub klienta)"):
     else:
         opts = {}
         for i, r in dfp.iterrows():
-            lbl = (str(r["Opis dla klienta"] or "").strip()
+            lbl = (str(r.get("Nazwa") or "").strip() or str(r["Opis dla klienta"] or "").strip()
                    or (r["Produkt"] if r["Produkt"] not in (None, OUTSIDE) else "pozycja"))
             opts["%d. %s" % (i + 1, lbl[:60])] = i
         pick = st.selectbox("Która pozycja?", list(opts.keys()), key="save_row_pick")
@@ -494,7 +517,8 @@ with st.expander("💾 Zapisz pozycję jako produkt (ONDRE lub klienta)"):
         cat = sc2.selectbox("Kategoria", cats + ["➕ nowa…"], key="save_cat")
         if cat == "➕ nowa…":
             cat = st.text_input("Nazwa nowej kategorii", key="save_newcat").strip()
-        default_name = (str(row["Opis dla klienta"] or "").strip()[:80]
+        default_name = (str(row.get("Nazwa") or "").strip()[:80]
+                        or str(row["Opis dla klienta"] or "").strip()[:80]
                         or (row["Produkt"] if row["Produkt"] not in (None, OUTSIDE) else ""))
         pname = st.text_input("Nazwa produktu", value=default_name, key="save_name")
         unit = "m2" if _f(row["Cena/m²"]) is not None else "szt"
