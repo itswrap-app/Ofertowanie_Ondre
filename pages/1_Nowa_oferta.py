@@ -94,6 +94,29 @@ def _unit_price(pid, tier):
     return None
 
 
+def _clean_opis(s):
+    """Usuwa z opisu dla klienta kody produktów i wtrącenia cenowe."""
+    s = str(s or "")
+    s = re.sub(r"\s*\(\s*P\d{3,4}\s*\)", "", s)                 # (P095)
+    s = re.sub(r"\s*\([^)]*\bzł[^)]*\)", "", s)                 # (45 zł netto/m²)
+    s = re.sub(r"\bP\d{3,4}\b", "", s)                          # samotny kod P095
+    return re.sub(r"\s{2,}", " ", s).strip(" ,;–-")
+
+
+def _skladnik_value(s, tier):
+    """Wartość jednego składnika na 1 jednostkę pozycji (app liczy, AI nie)."""
+    rate = _f(s.get("cena_jedn"))
+    if rate is None:
+        sid = s.get("id_produktu")
+        if sid and sid in BY_ID.index:
+            rate = pricing.price_for(BY_ID.loc[sid], tier)
+    rate = rate or 0
+    cnt = _f(s.get("ilosc")) or 1
+    sz, wy = _f(s.get("szer")), _f(s.get("wys"))
+    area = (sz * wy) if (sz and wy) else 1
+    return cnt * area * rate
+
+
 def rows_from_pozycje(pozycje, tier, prev_df=None):
     prevmap = {}
     if prev_df is not None:
@@ -114,10 +137,25 @@ def rows_from_pozycje(pozycje, tier, prev_df=None):
                 wys = _f(BY_ID.loc[pid]["def_wys"])
         dodatek_id = p.get("dodatek_id")
         montaz = bool(p.get("montaz"))
+        skladniki = p.get("skladniki")
         nazwa_p = (p.get("nazwa_pozycji") or "").strip()
-        opis = (p.get("opis_pozycji") or "")
+        opis = _clean_opis(p.get("opis_pozycji") or "")
         ai_tot = _f(p.get("cena_calosc"))
         ai_szt2 = _f(p.get("cena_szt"))
+
+        # --- POZYCJA ZE SKŁADNIKÓW (komplet / wiele materiałów, też spoza cennika) ---
+        if isinstance(skladniki, list) and skladniki:
+            if ai_tot is not None and ilosc:            # cena podana wprost ma priorytet
+                per_unit = round(ai_tot / float(ilosc), 2)
+            elif ai_szt2 is not None:
+                per_unit = ai_szt2
+            else:
+                per_unit = round(sum(_skladnik_value(s, tier) for s in skladniki), 2)
+            rows.append({"Produkt": OUTSIDE, "Nazwa": nazwa_p or "Komplet",
+                         "Opis dla klienta": opis, "Ilość": ilosc,
+                         "Szer [m]": None, "Wys [m]": None,
+                         "Cena/m²": None, "Cena/szt": per_unit, "Rabat %": 0, "Wartość": None})
+            continue
 
         # --- POZYCJA ZŁOŻONA (oklejenie): materiał bazowy + dodatek (laminat) + montaż ---
         if pid and pid in BY_ID.index and (dodatek_id or montaz):
