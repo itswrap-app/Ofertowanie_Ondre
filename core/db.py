@@ -90,6 +90,7 @@ products = Table(
     Column("note", Text), Column("min_price", Float),
     Column("scope", String(16), default="ondre"), Column("client_key", String(200)),
     Column("status", String(16), default="active"), Column("created_by", String(128)),
+    Column("def_szer", Float), Column("def_wys", Float),
 )
 price_history = Table(
     "price_history", md,
@@ -161,6 +162,7 @@ def _migrate():
     new_cols = {
         "min_price": "FLOAT", "scope": "VARCHAR(16)", "client_key": "VARCHAR(200)",
         "status": "VARCHAR(16)", "created_by": "VARCHAR(128)",
+        "def_szer": "FLOAT", "def_wys": "FLOAT",
     }
     for name, typ in new_cols.items():
         if name not in cols:
@@ -175,6 +177,25 @@ def _migrate():
             c.execute(text("UPDATE products SET scope='ondre' WHERE scope IS NULL"))
             c.execute(text("UPDATE products SET status='active' WHERE status IS NULL"))
             c.execute(text("UPDATE products SET min_price=150 WHERE min_price IS NULL"))
+    except Exception:
+        pass
+    # stałe wymiary konstrukcji — sparsuj z nazwy „WxH" (cm) tam, gdzie brak (jednorazowo)
+    try:
+        import re
+        flag = get_settings().get("migr_defdims")
+        if not flag:
+            constr = ("Roll-upy", "LED BOX / standy LED", "Ścianki LED", "X-bannery")
+            with eng.begin() as c:
+                rows = c.execute(text("SELECT id,name,section FROM products "
+                                      "WHERE def_szer IS NULL")).fetchall()
+                for pid, name, section in rows:
+                    if section in constr and name:
+                        m = re.search(r"(\d{2,4})\s*[x×]\s*(\d{2,4})", name)
+                        if m:
+                            w, h = int(m.group(1)) / 100.0, int(m.group(2)) / 100.0
+                            c.execute(text("UPDATE products SET def_szer=:w, def_wys=:h "
+                                           "WHERE id=:i"), {"w": w, "h": h, "i": pid})
+            save_settings({"migr_defdims": "1"})
     except Exception:
         pass
     # kolumny w tabeli users
@@ -255,7 +276,7 @@ def products_df(active_only=False, scope=None, status=None, client_key=None) -> 
     init_db()
     q = ("SELECT id,section,name,variant,unit,base_cost,m_katalog,m_staly,"
          "m_posrednik,m_agencyjny,m_jedi,active,card_file,note,min_price,"
-         "scope,client_key,status,created_by FROM products")
+         "scope,client_key,status,created_by,def_szer,def_wys FROM products")
     conds, params = [], {}
     if active_only:
         conds.append("active=1")
@@ -297,7 +318,7 @@ def count_pending() -> int:
 
 def create_custom_product(name, section, unit, base_cost, marks, min_price,
                           scope="ondre", client_key=None, status="active",
-                          created_by="", variant="") -> str:
+                          created_by="", variant="", def_szer=None, def_wys=None) -> str:
     """Tworzy produkt (ONDRE / klienta / oczekujący). marks: 5 narzutów."""
     pid = next_product_id()
     with get_engine().begin() as c:
@@ -305,7 +326,8 @@ def create_custom_product(name, section, unit, base_cost, marks, min_price,
             id=pid, section=section, name=name, variant=variant, unit=unit,
             base_cost=base_cost, m_katalog=marks[0], m_staly=marks[1], m_posrednik=marks[2],
             m_agencyjny=marks[3], m_jedi=marks[4], active=1, min_price=min_price,
-            scope=scope, client_key=client_key, status=status, created_by=created_by))
+            scope=scope, client_key=client_key, status=status, created_by=created_by,
+            def_szer=def_szer, def_wys=def_wys))
         c.execute(insert(price_history).values(
             ts=_now(), usr=created_by or "system", product_id=pid,
             field="create_%s" % status, old_value="", new_value=name))

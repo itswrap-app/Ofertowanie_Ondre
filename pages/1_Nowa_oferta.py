@@ -13,7 +13,7 @@ from core.pdf_offer import build_offer_pdf
 from core.pipedrive import PipedriveClient
 from core.ui import get_secret, page_setup
 
-page_setup("Nowa oferta", "🧾", sidebar="collapsed")
+page_setup("Nowa oferta", "🧾")
 user = auth.login_gate()
 
 OUTSIDE = "— pozycja spoza cennika —"
@@ -106,28 +106,35 @@ def rows_from_pozycje(pozycje, tier, prev_df=None):
         label = BY_ID.loc[pid, "label"] if (pid and pid in BY_ID.index) else OUTSIDE
         ilosc = p.get("ilosc_szt") or 1
         szer, wys = p.get("szerokosc_m"), p.get("wysokosc_m")
+        # stałe wymiary produktu z cennika, gdy AI ich nie podało
+        if pid and pid in BY_ID.index:
+            if szer in (None, "") and _f(BY_ID.loc[pid].get("def_szer")) is not None:
+                szer = _f(BY_ID.loc[pid]["def_szer"])
+            if wys in (None, "") and _f(BY_ID.loc[pid].get("def_wys")) is not None:
+                wys = _f(BY_ID.loc[pid]["def_wys"])
         dodatek_id = p.get("dodatek_id")
         montaz = bool(p.get("montaz"))
+        nazwa_p = (p.get("nazwa_pozycji") or "").strip()
         opis = (p.get("opis_pozycji") or "")
+        ai_tot = _f(p.get("cena_calosc"))
+        ai_szt2 = _f(p.get("cena_szt"))
 
         # --- POZYCJA ZŁOŻONA (oklejenie): materiał bazowy + dodatek (laminat) + montaż ---
         if pid and pid in BY_ID.index and (dodatek_id or montaz):
             base_row = BY_ID.loc[pid]
-            base_unit = pricing.price_for(base_row, tier) or 0
-            dod_unit = (_unit_price(dodatek_id, tier) or 0) if dodatek_id else 0
-            mont_unit = 2 * base_unit if montaz else 0            # montaż = 2× folia (za jedn.)
-            rate = round(base_unit + dod_unit + mont_unit, 2)     # cena za jednostkę całości
             czy_m2 = (base_row.get("unit") or "m2") == "m2"
-            parts = ["%s: %.2f" % (base_row["name"], base_unit)]
-            if dodatek_id and dodatek_id in BY_ID.index:
-                parts.append("%s: %.2f" % (BY_ID.loc[dodatek_id, "name"], dod_unit))
-            if montaz:
-                parts.append("montaż (2×folia): %.2f" % mont_unit)
-            jm = "m²" if czy_m2 else "szt"
-            breakdown = " + ".join(parts) + " zł/%s" % jm
+            if ai_tot is not None and ilosc:          # cena podana przez handlowca ma priorytet
+                rate = round(ai_tot / float(ilosc), 2)
+            elif ai_szt2 is not None:
+                rate = ai_szt2
+            else:
+                base_unit = pricing.price_for(base_row, tier) or 0
+                dod_unit = (_unit_price(dodatek_id, tier) or 0) if dodatek_id else 0
+                mont_unit = 2 * base_unit if montaz else 0        # montaż = 2× folia (za jedn.)
+                rate = round(base_unit + dod_unit + mont_unit, 2)
             rows.append({
-                "Produkt": OUTSIDE, "Nazwa": opis or "Oklejenie",
-                "Opis dla klienta": breakdown,
+                "Produkt": OUTSIDE, "Nazwa": nazwa_p or "Oklejenie",
+                "Opis dla klienta": opis,
                 "Ilość": ilosc, "Szer [m]": None, "Wys [m]": None,
                 "Cena/m²": rate if czy_m2 else None,
                 "Cena/szt": None if czy_m2 else rate,
@@ -135,11 +142,11 @@ def rows_from_pozycje(pozycje, tier, prev_df=None):
             continue
 
         # --- POZYCJA ZWYKŁA ---
-        ai_tot, ai_szt, ai_m2 = _f(p.get("cena_calosc")), _f(p.get("cena_szt")), _f(p.get("cena_m2"))
+        ai_m2 = _f(p.get("cena_m2"))
         if ai_tot is not None and ilosc:
             cm2, cszt = None, round(ai_tot / float(ilosc), 4)
-        elif ai_szt is not None:
-            cm2, cszt = None, ai_szt
+        elif ai_szt2 is not None:
+            cm2, cszt = None, ai_szt2
         elif ai_m2 is not None:
             cm2, cszt = ai_m2, None
         else:
@@ -150,7 +157,7 @@ def rows_from_pozycje(pozycje, tier, prev_df=None):
                     cm2 = pc2
                 if cm2 is None and not pd.isna(pcs):
                     cszt = pcs
-        rows.append({"Produkt": label, "Nazwa": "", "Opis dla klienta": opis,
+        rows.append({"Produkt": label, "Nazwa": nazwa_p, "Opis dla klienta": opis,
                      "Ilość": ilosc, "Szer [m]": szer, "Wys [m]": wys,
                      "Cena/m²": cm2, "Cena/szt": cszt, "Rabat %": 0, "Wartość": None})
     return pd.DataFrame(rows, columns=COLS)
@@ -375,8 +382,11 @@ add1, add2 = st.columns([4, 1])
 quick = add1.selectbox("Dodaj pozycję z cennika", LABELS, key="quick_add")
 if add2.button("➕ Dodaj"):
     cm2, cszt = base_prices(quick, tier)
+    dszer = dwys = None
+    if quick in BY_LABEL.index:
+        dszer, dwys = _f(BY_LABEL.loc[quick].get("def_szer")), _f(BY_LABEL.loc[quick].get("def_wys"))
     new = pd.DataFrame([{"Produkt": quick, "Nazwa": "", "Opis dla klienta": "", "Ilość": 1,
-                         "Szer [m]": None, "Wys [m]": None, "Cena/m²": cm2,
+                         "Szer [m]": dszer, "Wys [m]": dwys, "Cena/m²": cm2,
                          "Cena/szt": cszt, "Rabat %": 0, "Wartość": None}])
     ss["items"] = recalc(pd.concat([ss["items"], new], ignore_index=True))
     st.rerun()
@@ -423,6 +433,15 @@ def _same_calc(a, b):
 # żeby w tabeli nie została stara wartość po edycji ilości/ceny
 if not _same_calc(recalced, edited):
     st.rerun()
+
+# pełny podgląd opisów (Streamlit nie zawija tekstu w komórce — tu widać całość)
+_prev = ss["items"]
+if not _prev.empty:
+    with st.expander("👁 Podgląd pełnych nazw i opisów pozycji"):
+        for i, r in _prev.reset_index(drop=True).iterrows():
+            nm = str(r.get("Nazwa") or "").strip() or (r["Produkt"] if r["Produkt"] != OUTSIDE else "Pozycja")
+            op = str(r["Opis dla klienta"] or "").strip()
+            st.markdown("**%d. %s**%s" % (i + 1, nm, ("  \n" + op) if op else ""))
 
 b1, b2, _sp = st.columns([1.5, 1.8, 3])
 if b1.button("↺ Uzupełnij puste ceny"):
@@ -515,6 +534,13 @@ with st.expander("💾 Zapisz pozycję jako produkt (ONDRE lub klienta)"):
                                   key="save_price")
         cmin = cc2.number_input("Min. wartość pozycji [zł]", value=150.0, min_value=0.0,
                                 format="%.2f", key="save_min")
+        st.caption("Stały wymiar produktu (opcjonalnie) — podstawi się przy dodaniu do oferty, "
+                   "np. monidło 0.79 × 0.24 m:")
+        dd1, dd2 = st.columns(2)
+        dszer = dd1.number_input("Szerokość [m]", value=float(_f(row["Szer [m]"]) or 0),
+                                 min_value=0.0, format="%.2f", key="save_dszer")
+        dwys = dd2.number_input("Wysokość [m]", value=float(_f(row["Wys [m]"]) or 0),
+                                min_value=0.0, format="%.2f", key="save_dwys")
         need_client = scope == "Produkt klienta" and not _ckey
         if need_client:
             st.warning("Aby zapisać produkt klienta, wybierz najpierw klienta (Pipedrive lub "
@@ -526,7 +552,8 @@ with st.expander("💾 Zapisz pozycję jako produkt (ONDRE lub klienta)"):
                 marks=[0, 0, 0, 0, 0], min_price=round(cmin, 2),
                 scope=("ondre" if scope == "Produkt ONDRE" else "client"),
                 client_key=(None if scope == "Produkt ONDRE" else _ckey),
-                status="active", created_by=user["name"])
+                status="active", created_by=user["name"],
+                def_szer=round(dszer, 3) or None, def_wys=round(dwys, 3) or None)
             st.cache_data.clear()
             st.success("Zapisano „%s” jako %s." % (pname.strip(), scope.lower()))
             st.rerun()

@@ -67,11 +67,12 @@ ani po, bez znaczników ```:
  "pozycje": [
    {
      "id_produktu": "P010" lub null,
-     "opis_pozycji": "opis pozycji dla klienta",
+     "nazwa_pozycji": "krótki tytuł pozycji, np. „Oklejenie monidła 790×240”",
+     "opis_pozycji": "KONKRETNA specyfikacja dla klienta (materiał, wykończenie, montaż)",
      "ilosc_szt": liczba,
      "szerokosc_m": liczba|null, "wysokosc_m": liczba|null,
      "cena_szt": liczba|null,      // cena NETTO za sztukę, jeśli handlowiec ją podał/ustalił
-     "cena_calosc": liczba|null,   // cena NETTO łączna za CAŁĄ pozycję, jeśli podano „za całość”
+     "cena_calosc": liczba|null,   // cena NETTO łączna za CAŁĄ pozycję, jeśli handlowiec podał
      "cena_m2": liczba|null,       // cena NETTO za m², jeśli podano
      "dodatek_id": "P129"|null,    // id produktu doliczanego per jednostkę (np. laminat do folii)
      "montaz": true|false,         // czy doliczyć montaż = 2× cena materiału bazowego (folii)
@@ -85,19 +86,21 @@ ani po, bez znaczników ```:
 
 Zasady:
 - "pozycje" to ZAWSZE pełna, aktualna lista (nie różnice).
+- OPIS: "opis_pozycji" MUSI być konkretną specyfikacją techniczną dla klienta — np. „Druk na folii
+  polimerowej z laminatem matowym + montaż", NIE ogólnikiem typu „oklejenie monidła". „nazwa_pozycji"
+  to krótki tytuł (np. „Oklejenie monidła 790×240").
 - Cennik podaje JEDNOSTKĘ i CENĘ za jednostkę dla poziomu klienta (do orientacji).
-- ZWYKŁE pojedyncze pozycje z cennika: NIE wpisuj cen — zostaw cena_szt/cena_calosc/cena_m2 = null,
-  aplikacja policzy z cennika. Ceny wpisuj TYLKO gdy handlowiec sam podał cenę. Nie licz „z głowy”.
+- ZWYKŁE pojedyncze pozycje z cennika: NIE wpisuj cen — zostaw cena_* = null, aplikacja policzy
+  z cennika. Ceny wpisuj TYLKO gdy handlowiec sam podał cenę. Nie licz „z głowy”.
+- CENA PODANA PRZEZ HANDLOWCA (np. „cena 4200"): wpisz ją w cena_calosc (za całą pozycję) — także dla
+  pozycji złożonych (oklejenie); wtedy aplikacja użyje tej ceny zamiast liczyć ze składników.
 - MATERIAŁY OD m² podane jako łączny metraż BEZ wymiarów (np. „8 m²"): wpisz metraż w ilosc_szt,
-  a szerokosc_m/wysokosc_m zostaw null (aplikacja pomnoży cena/m² × metraż).
-- OKLEJENIE / pozycja złożona (folia + laminat + montaż): zwróć JEDNĄ pozycję:
-  id_produktu = FOLIA (materiał bazowy z cennika), ilosc_szt = metraż w m²,
-  dodatek_id = id LAMINATU (jeśli ma być laminat, inaczej null), montaz = true (jeśli z montażem).
-  NIE licz sam ceny — zostaw cena_* = null. Aplikacja policzy cenę za m² całości
-  (folia + laminat + montaż 2×folia) i pomnoży przez metraż. Rozbijaj na osobne pozycje TYLKO gdy
-  handlowiec wyraźnie poprosi („rozbij osobno") — wtedy osobno folia, osobno laminat.
-- Wymiary w metrach. Warianty druku: 4+0 jednostronny kolor, 4+4 dwustronny,
-  5+0/5+5 z kolorem dodatkowym; gdy klient nie precyzuje — przyjmij 4+0 i odnotuj w uwagach.
+  a szerokosc_m/wysokosc_m zostaw null.
+- OKLEJENIE / pozycja złożona (folia + laminat + montaż): zwróć JEDNĄ pozycję: id_produktu = FOLIA,
+  ilosc_szt = metraż, dodatek_id = id LAMINATU (lub null), montaz = true (jeśli z montażem).
+  NIE licz sam ceny — aplikacja policzy cenę za m² całości. Rozbijaj tylko na wyraźną prośbę.
+- Wymiary w metrach. Warianty druku: 4+0 jednostronny, 4+4 dwustronny, 5+0/5+5 z kolorem dodatkowym;
+  gdy klient nie precyzuje — przyjmij 4+0 i odnotuj w uwagach.
 - Produkt spoza cennika: id_produktu=null, pewnosc=0.
 - "dane_klienta": wyciągnij ze stopki maila co się da (firma, osoba, email, telefon, adres, NIP).
 - Nie wymyślaj ilości/wymiarów — gdy brak, zostaw null i dopytaj w "wiadomosc".
