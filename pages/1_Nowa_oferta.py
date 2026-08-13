@@ -17,6 +17,7 @@ page_setup("Nowa oferta", "🧾")
 user = auth.login_gate()
 
 OUTSIDE = "— pozycja spoza cennika —"
+DEFAULT_MIN_POS = 150.0   # domyślna minimalna wartość pozycji spoza cennika
 EDIT_COLS = ["Produkt", "Nazwa", "Opis dla klienta", "Ilość", "Szer [m]", "Wys [m]",
              "Cena/m²", "Cena/szt", "Rabat %"]
 CALC_COLS = ["Wartość"]
@@ -206,7 +207,7 @@ def recalc(df, prev=None):
     for idx in df.index:
         r = df.loc[idx]
         label = r["Produkt"]
-        minp = BY_LABEL.loc[label, "min_price"] if label in BY_LABEL.index else None
+        minp = BY_LABEL.loc[label, "min_price"] if label in BY_LABEL.index else DEFAULT_MIN_POS
         driver = None
         if prev is not None and idx in prev.index:
             if not _eq(prev.at[idx, "Cena/m²"], r["Cena/m²"]):
@@ -227,8 +228,10 @@ def catalog_for_chat(df, tier):
     for _, r in df.iterrows():
         price = pricing.price_for(r, tier)
         pstr = ("%.2f zł/%s" % (price, r["unit"])) if price is not None else "wycena indywidualna"
-        lines.append("%s | %s | %s %s | jedn:%s | cena %s: %s" % (
-            r["id"], r["section"], r["name"], _vv(r["variant"]), r["unit"], tier, pstr))
+        mn = _f(r.get("min_price"))
+        mstr = (" | min. wartość poz.: %.0f zł" % mn) if mn else ""
+        lines.append("%s | %s | %s %s | jedn:%s | cena %s: %s%s" % (
+            r["id"], r["section"], r["name"], _vv(r["variant"]), r["unit"], tier, pstr, mstr))
     return "\n".join(lines)
 
 
@@ -357,9 +360,12 @@ def call_claude(user_content, seed=False):
 col_a, col_b = st.columns([1, 2])
 if col_a.button("▶️ Przeanalizuj i rozpocznij czat", type="primary",
                 disabled=not (ai_key and ss["email_text"].strip())):
-    content = ("CENNIK (id | kategoria | nazwa | jednostka | cena dla poziomu klienta):\n"
-               + catalog_for_chat(prod, tier) + "\n\n---\nZAPYTANIE KLIENTA:\n"
-               + ss["email_text"].strip())
+    content = ("CENNIK (id | kategoria | nazwa | jednostka | cena dla poziomu klienta | minimalka):\n"
+               + catalog_for_chat(prod, tier)
+               + "\n\nMINIMALKI: każda pozycja ma minimalną wartość (domyślnie 150 zł netto). "
+                 "Jeśli policzona wartość pozycji jest niższa niż minimalka, aplikacja podbija ją "
+                 "do minimalki. Dla małego nakładu (np. 1 kpl) przyjmij minimalkę jako cenę pozycji."
+               + "\n\n---\nZAPYTANIE KLIENTA:\n" + ss["email_text"].strip())
     try:
         call_claude(content, seed=True)
         st.rerun()
