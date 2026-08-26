@@ -93,8 +93,23 @@ def _bootstrap_from_secrets():
 def login_gate():
     """Wstaw na początku każdej strony. Zwraca słownik zalogowanego użytkownika."""
     if not st.session_state.get("_seeded"):
-        db.seed_if_empty()
-        st.session_state["_seeded"] = True
+        import time
+        last = None
+        for attempt in range(3):                 # baza po nocy bywa „zimna" — ponów
+            try:
+                db.seed_if_empty()
+                st.session_state["_seeded"] = True
+                last = None
+                break
+            except Exception as e:
+                last = e
+                time.sleep(1.5)
+        if last is not None:
+            st.warning("Łączę się z bazą danych… jeśli to pierwsze uruchomienie dziś rano, "
+                       "chwilę to potrwa.")
+            if st.button("🔄 Spróbuj ponownie"):
+                st.rerun()
+            st.stop()
     if current_user():
         _sidebar_user()
         return current_user()

@@ -151,7 +151,14 @@ def rows_from_pozycje(pozycje, tier, prev_df=None):
             elif ai_szt2 is not None:
                 per_unit = ai_szt2
             else:
-                per_unit = round(sum(_skladnik_value(s, tier) for s in skladniki), 2)
+                per_unit = sum(_skladnik_value(s, tier) for s in skladniki)
+                if montaz:                              # montaż = 2× wartość folii
+                    folia = [_skladnik_value(s, tier) for s in skladniki
+                             if (s.get("rola") or "").lower() == "folia"]
+                    base = (sum(folia) if folia
+                            else max((_skladnik_value(s, tier) for s in skladniki), default=0))
+                    per_unit += 2 * base
+                per_unit = round(per_unit, 2)
             rows.append({"Produkt": OUTSIDE, "Nazwa": nazwa_p or "Komplet",
                          "Opis dla klienta": opis, "Ilość": ilosc,
                          "Szer [m]": None, "Wys [m]": None,
@@ -162,22 +169,28 @@ def rows_from_pozycje(pozycje, tier, prev_df=None):
         if pid and pid in BY_ID.index and (dodatek_id or montaz):
             base_row = BY_ID.loc[pid]
             czy_m2 = (base_row.get("unit") or "m2") == "m2"
-            if ai_tot is not None and ilosc:          # cena podana przez handlowca ma priorytet
-                rate = round(ai_tot / float(ilosc), 2)
-            elif ai_szt2 is not None:
+            if ai_szt2 is not None:
                 rate = ai_szt2
             else:
                 base_unit = pricing.price_for(base_row, tier) or 0
                 dod_unit = (_unit_price(dodatek_id, tier) or 0) if dodatek_id else 0
                 mont_unit = 2 * base_unit if montaz else 0        # montaż = 2× folia (za jedn.)
                 rate = round(base_unit + dod_unit + mont_unit, 2)
-            rows.append({
-                "Produkt": OUTSIDE, "Nazwa": nazwa_p or "Oklejenie",
-                "Opis dla klienta": opis,
-                "Ilość": ilosc, "Szer [m]": None, "Wys [m]": None,
-                "Cena/m²": rate if czy_m2 else None,
-                "Cena/szt": None if czy_m2 else rate,
-                "Rabat %": 0, "Wartość": None})
+            # jeśli podano wymiary (np. format A4) — stawka jest za m², liczona przez pole × szt.;
+            # bez wymiarów — ilosc traktujemy jako metraż (rate × ilosc)
+            has_dims = _f(szer) and _f(wys)
+            row = {"Produkt": OUTSIDE, "Nazwa": nazwa_p or "Oklejenie", "Opis dla klienta": opis,
+                   "Ilość": ilosc, "Rabat %": 0, "Wartość": None}
+            if czy_m2 and has_dims:
+                row.update({"Szer [m]": szer, "Wys [m]": wys, "Cena/m²": rate, "Cena/szt": None})
+            elif czy_m2:
+                row.update({"Szer [m]": None, "Wys [m]": None, "Cena/m²": rate, "Cena/szt": None})
+            else:
+                row.update({"Szer [m]": None, "Wys [m]": None, "Cena/m²": None, "Cena/szt": rate})
+            if ai_tot is not None and ilosc:          # cena podana wprost ma bezwzględny priorytet
+                row.update({"Szer [m]": None, "Wys [m]": None, "Cena/m²": None,
+                            "Cena/szt": round(ai_tot / float(ilosc), 2)})
+            rows.append(row)
             continue
 
         # --- POZYCJA ZWYKŁA ---

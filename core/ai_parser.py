@@ -78,7 +78,7 @@ ani po, bez znaczników ```:
      "montaz": true|false,         // czy doliczyć montaż = 2× cena materiału bazowego (folii)
      "skladniki": [                // dla kompletów / pozycji z wielu materiałów (też spoza cennika)
        {"opis":"topper 305×288","id_produktu":"P095"|null,"cena_jedn":45|null,
-        "ilosc":2,"szer":0.305,"wys":0.288}
+        "ilosc":2,"szer":0.305,"wys":0.288,"rola":"folia"|"laminat"|null}
      ]|null,
      "uwagi": "założenia/wątpliwości"|"",
      "pewnosc": 0-1
@@ -97,14 +97,17 @@ Zasady:
 - ZWYKŁE pojedyncze pozycje z cennika: NIE wpisuj cen — zostaw cena_* = null, aplikacja policzy.
 - CENA PODANA PRZEZ HANDLOWCA (np. „cena 4200"): wpisz w cena_calosc (za całą pozycję).
 - MATERIAŁY OD m² podane jako łączny metraż BEZ wymiarów (np. „8 m²"): wpisz metraż w ilosc_szt.
+- MATERIAŁY OD m² w konkretnym formacie i liczbie sztuk (np. „A4, 20 szt."): podaj szerokosc_m i
+  wysokosc_m (wymiar 1 szt., np. 0,21 × 0,297) oraz ilosc_szt = liczba sztuk. Aplikacja policzy
+  stawka/m² × pole × liczba sztuk. Dotyczy to też pozycji z dodatek_id/montaz (np. PCV + laminat A4).
 - KOMPLETY / pozycje z WIELU materiałów (także spoza cennika, np. mata magnetyczna 45 zł/m²):
-  użyj "skladniki" i NIE licz sam ceny — aplikacja policzy. Każdy składnik opisuje materiał na 1
-  jednostkę pozycji: id_produktu (stawka z cennika) LUB cena_jedn (własna stawka, np. mata 45),
-  ilosc (ile sztuk na 1 jednostkę), szer/wys w metrach. Warstwy na tym samym elemencie
-  (mata+folia+laminat na topperze) = 3 składniki z tymi samymi wymiarami i ilością, każdy z inną stawką.
+  użyj "skladniki" i NIE licz sam ceny. Każdy składnik: id_produktu (stawka z cennika) LUB cena_jedn
+  (własna stawka), ilosc (szt na 1 jednostkę), szer/wys w metrach, rola ("folia"/"laminat"/null).
+  Warstwy na tym samym elemencie = osobne składniki z tymi samymi wymiarami i ilością.
+  Jeśli z montażem — ustaw na pozycji montaz=true i oznacz warstwę folii rola="folia"
+  (aplikacja doliczy montaż = 2× folia).
 - KOMPLET jako jednostka: gdy klient zamawia komplety (kpl), zrób JEDNĄ pozycję na typ, ilosc_szt =
-  liczba kompletów (np. 100), a składniki opisują zawartość 1 kompletu. Wtedy Cena/szt = cena
-  1 kompletu, Wartość = ×liczba kompletów. NIE zamieniaj metrażu na ilość sztuk.
+  liczba kompletów, a składniki opisują zawartość 1 kompletu. Cena/szt = cena 1 kompletu.
 - OKLEJENIE proste (folia + laminat + montaż z cennika): możesz użyć id_produktu=FOLIA, dodatek_id=LAMINAT,
   montaz=true (aplikacja policzy montaż = 2× folia). Rozbijaj tylko na wyraźną prośbę.
 - Wymiary w metrach. Warianty druku: 4+0 jednostronny, 4+4 dwustronny, 5+0/5+5 z kolorem dodatkowym.
