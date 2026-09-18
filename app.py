@@ -11,10 +11,17 @@ st.title("Generator ofert ONDRE")
 st.caption("Witaj, %s! Mail klienta → analiza AI → tabela pozycji → PDF z kartami produktów."
            % user["name"].split(" ")[0])
 
-df = db.products_df()
-active = df[df["active"] == 1]
-missing = active["base_cost"].isna().sum()
-my_offers = db.offers_df(1000, user_id=user["id"], is_admin=auth.is_admin())
+try:
+    with st.spinner("Wczytuję dane…"):
+        df = db.products_df()
+        active = df[df["active"] == 1]
+        missing = active["base_cost"].isna().sum()
+        my_offers = db.offers_df(1000, user_id=user["id"], is_admin=auth.is_admin())
+except Exception:
+    st.warning("Baza jeszcze się wybudza — daj chwilę i odśwież.")
+    if st.button("🔄 Odśwież"):
+        st.rerun()
+    st.stop()
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Pozycje w cenniku", len(active))

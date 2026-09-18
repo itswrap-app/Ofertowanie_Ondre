@@ -56,15 +56,39 @@ def _first_run_setup():
     st.stop()
 
 
+def _ensure_seeded():
+    if st.session_state.get("_seeded"):
+        return
+    import time
+    err = None
+    for _ in range(3):
+        try:
+            db.seed_if_empty()
+            _bootstrap_from_secrets()
+            st.session_state["_seeded"] = True
+            return
+        except Exception as e:
+            err = e
+            time.sleep(1.0)
+    raise err
+
+
 def _login_form():
     st.title("🔐 Logowanie")
-    st.caption("ONDRE · generator ofert")
+    st.caption("ONDRE · generator ofert · wersja 2026-09-11 (szybki start)")
     with st.form("login"):
         email = st.text_input("E-mail")
         pw = st.text_input("Hasło", type="password")
         ok = st.form_submit_button("Zaloguj", type="primary")
     if ok:
-        u = db.get_user_by_email(email)
+        try:
+            with st.spinner("Łączę z bazą i loguję…"):
+                _ensure_seeded()
+                u = db.get_user_by_email(email)
+        except Exception:
+            st.error("Nie udało się połączyć z bazą — spróbuj ponownie za chwilę "
+                     "(pierwsze wejście w dniu bywa wolniejsze).")
+            st.stop()
         if not u or not u.get("active"):
             st.error("Nie znaleziono aktywnego konta o tym adresie.")
         elif not check_pw(pw, u.get("password_hash") or ""):
@@ -91,31 +115,12 @@ def _bootstrap_from_secrets():
 
 
 def login_gate():
-    """Wstaw na początku każdej strony. Zwraca słownik zalogowanego użytkownika."""
-    if not st.session_state.get("_seeded"):
-        import time
-        last = None
-        for attempt in range(3):                 # baza po nocy bywa „zimna" — ponów
-            try:
-                db.seed_if_empty()
-                st.session_state["_seeded"] = True
-                last = None
-                break
-            except Exception as e:
-                last = e
-                time.sleep(1.5)
-        if last is not None:
-            st.warning("Łączę się z bazą danych… jeśli to pierwsze uruchomienie dziś rano, "
-                       "chwilę to potrwa.")
-            if st.button("🔄 Spróbuj ponownie"):
-                st.rerun()
-            st.stop()
+    """Wstaw na początku każdej strony. Zwraca słownik zalogowanego użytkownika.
+    Ekran logowania renderuje się BEZ zapytań do bazy — baza jest dotykana dopiero
+    po kliknięciu „Zaloguj" (żeby zimne połączenie nie blokowało renderu)."""
     if current_user():
         _sidebar_user()
         return current_user()
-    _bootstrap_from_secrets()
-    if db.count_users() == 0:
-        _first_run_setup()
     _login_form()
 
 

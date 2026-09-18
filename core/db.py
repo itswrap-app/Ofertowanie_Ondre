@@ -132,11 +132,12 @@ def get_engine():
     global _ENGINE
     if _ENGINE is None:
         url = _db_url()
-        kw = {"pool_pre_ping": True, "pool_recycle": 280, "future": True}
+        kw = {"pool_pre_ping": True, "pool_recycle": 1800, "future": True}
         if url.startswith("sqlite"):
             kw["connect_args"] = {"check_same_thread": False}
         else:
-            kw["connect_args"] = {"connect_timeout": 10}
+            kw["connect_args"] = {"connect_timeout": 10,
+                                  "options": "-c statement_timeout=15000"}
         _ENGINE = create_engine(url, **kw)
     return _ENGINE
 

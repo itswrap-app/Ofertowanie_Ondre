@@ -23,17 +23,17 @@ EDIT_COLS = ["Produkt", "Nazwa", "Opis dla klienta", "Ilość", "Szer [m]", "Wys
 CALC_COLS = ["Wartość"]
 COLS = EDIT_COLS + CALC_COLS
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner="Wczytuję cennik…")
 def _load_catalog():
     return db.catalog_products()
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def _load_settings():
     return db.get_settings()
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def _load_client_products(client_key):
     return db.client_products(client_key)
 
