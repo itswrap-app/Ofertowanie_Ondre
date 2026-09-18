@@ -75,7 +75,7 @@ def _ensure_seeded():
 
 def _login_form():
     st.title("🔐 Logowanie")
-    st.caption("ONDRE · generator ofert · wersja 2026-09-11b")
+    st.caption("ONDRE · generator ofert · wersja 2026-09-11c")
     with st.form("login"):
         email = st.text_input("E-mail")
         pw = st.text_input("Hasło", type="password")
@@ -85,9 +85,13 @@ def _login_form():
             with st.spinner("Łączę z bazą i loguję…"):
                 _ensure_seeded()
                 u = db.get_user_by_email(email)
-        except Exception:
-            st.error("Baza jeszcze się wybudza (pierwsze wejście w dniu). "
-                     "Kliknij „Zaloguj” jeszcze raz za chwilę — powinno wejść.")
+        except Exception as e:
+            st.error("Nie mogę połączyć się z bazą danych. Najczęstsza przyczyna: projekt "
+                     "Supabase jest wstrzymany (Paused) — wejdź na supabase.com i kliknij "
+                     "„Restore project”. Szczegóły błędu poniżej:")
+            st.code(str(e)[:600] or type(e).__name__)
+            if st.button("🔄 Spróbuj ponownie"):
+                st.rerun()
             st.stop()
         if not u or not u.get("active"):
             st.error("Nie znaleziono aktywnego konta o tym adresie.")
