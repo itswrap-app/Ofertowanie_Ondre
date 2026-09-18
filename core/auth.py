@@ -75,7 +75,7 @@ def _ensure_seeded():
 
 def _login_form():
     st.title("🔐 Logowanie")
-    st.caption("ONDRE · generator ofert · wersja 2026-09-11 (szybki start)")
+    st.caption("ONDRE · generator ofert · wersja 2026-09-11b")
     with st.form("login"):
         email = st.text_input("E-mail")
         pw = st.text_input("Hasło", type="password")
@@ -86,8 +86,8 @@ def _login_form():
                 _ensure_seeded()
                 u = db.get_user_by_email(email)
         except Exception:
-            st.error("Nie udało się połączyć z bazą — spróbuj ponownie za chwilę "
-                     "(pierwsze wejście w dniu bywa wolniejsze).")
+            st.error("Baza jeszcze się wybudza (pierwsze wejście w dniu). "
+                     "Kliknij „Zaloguj” jeszcze raz za chwilę — powinno wejść.")
             st.stop()
         if not u or not u.get("active"):
             st.error("Nie znaleziono aktywnego konta o tym adresie.")

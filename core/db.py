@@ -136,8 +136,7 @@ def get_engine():
         if url.startswith("sqlite"):
             kw["connect_args"] = {"check_same_thread": False}
         else:
-            kw["connect_args"] = {"connect_timeout": 10,
-                                  "options": "-c statement_timeout=15000"}
+            kw["connect_args"] = {"connect_timeout": 15}
         _ENGINE = create_engine(url, **kw)
     return _ENGINE
 
