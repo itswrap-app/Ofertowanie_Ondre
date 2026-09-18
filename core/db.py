@@ -77,6 +77,7 @@ def _db_url() -> str:
 
 _ENGINE = None
 _INIT_DONE = False
+SCHEMA_VERSION = "2026-09-18"  # podbij przy kolejnych zmianach kolumn w _migrate
 md = MetaData()
 
 products = Table(
@@ -165,25 +166,47 @@ def init_db():
 
 
 def _migrate():
-    """Dodaje brakujące kolumny w istniejących tabelach + wypełnia domyślne."""
-    from sqlalchemy import inspect, text
+    """Dodaje brakujące kolumny w istniejących tabelach + wypełnia domyślne.
+    Szybka ścieżka: po pierwszym udanym przebiegu ustawia flagę i przy kolejnych
+    startach procesu nie robi nic poza jednym odczytem — bez refleksji schematu
+    (inspect()), która przez pooler potrafi być wolna i przeciągać logowanie."""
+    from sqlalchemy import text
     eng = get_engine()
     try:
-        cols = [c["name"] for c in inspect(eng).get_columns("products")]
+        if get_settings().get("schema_v") == SCHEMA_VERSION:
+            return
     except Exception:
-        return
+        pass
+    is_pg = eng.dialect.name == "postgresql"
     new_cols = {
         "min_price": "FLOAT", "scope": "VARCHAR(16)", "client_key": "VARCHAR(200)",
         "status": "VARCHAR(16)", "created_by": "VARCHAR(128)",
         "def_szer": "FLOAT", "def_wys": "FLOAT",
     }
-    for name, typ in new_cols.items():
-        if name not in cols:
-            try:
+    if is_pg:
+        try:
+            with eng.begin() as c:
+                for name, typ in new_cols.items():
+                    c.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS %s %s"
+                                  % (name, typ)))
+                c.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+                               "pipedrive_token TEXT"))
+        except Exception:
+            pass
+    else:
+        from sqlalchemy import inspect
+        try:
+            cols = [c["name"] for c in inspect(eng).get_columns("products")]
+            with eng.begin() as c:
+                for name, typ in new_cols.items():
+                    if name not in cols:
+                        c.execute(text("ALTER TABLE products ADD COLUMN %s %s" % (name, typ)))
+            ucols = [c["name"] for c in inspect(eng).get_columns("users")]
+            if "pipedrive_token" not in ucols:
                 with eng.begin() as c:
-                    c.execute(text("ALTER TABLE products ADD COLUMN %s %s" % (name, typ)))
-            except Exception:
-                pass
+                    c.execute(text("ALTER TABLE users ADD COLUMN pipedrive_token TEXT"))
+        except Exception:
+            pass
     # backfill wartości domyślnych (jednorazowo — tylko puste)
     try:
         with eng.begin() as c:
@@ -211,12 +234,8 @@ def _migrate():
             save_settings({"migr_defdims": "1"})
     except Exception:
         pass
-    # kolumny w tabeli users
     try:
-        ucols = [c["name"] for c in inspect(eng).get_columns("users")]
-        if "pipedrive_token" not in ucols:
-            with eng.begin() as c:
-                c.execute(text("ALTER TABLE users ADD COLUMN pipedrive_token TEXT"))
+        save_settings({"schema_v": SCHEMA_VERSION})
     except Exception:
         pass
 

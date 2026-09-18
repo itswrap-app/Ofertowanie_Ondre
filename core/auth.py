@@ -75,7 +75,7 @@ def _ensure_seeded():
 
 def _login_form():
     st.title("🔐 Logowanie")
-    st.caption("ONDRE · generator ofert · wersja 2026-09-11e")
+    st.caption("ONDRE · generator ofert · wersja 2026-09-18")
     with st.form("login"):
         email = st.text_input("E-mail")
         pw = st.text_input("Hasło", type="password")
