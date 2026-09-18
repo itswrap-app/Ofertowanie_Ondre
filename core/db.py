@@ -138,6 +138,17 @@ def get_engine():
         else:
             kw["connect_args"] = {"connect_timeout": 15}
         _ENGINE = create_engine(url, **kw)
+        if not url.startswith("sqlite"):
+            from sqlalchemy import event
+
+            @event.listens_for(_ENGINE, "connect")
+            def _set_timeout(dbapi_conn, _rec):    # limit czasu zapytania, bezpiecznie
+                try:
+                    cur = dbapi_conn.cursor()
+                    cur.execute("SET statement_timeout = 15000")
+                    cur.close()
+                except Exception:
+                    pass
     return _ENGINE
 
 
