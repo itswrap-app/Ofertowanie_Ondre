@@ -59,32 +59,42 @@ def _first_run_setup():
 def _ensure_seeded():
     if st.session_state.get("_seeded"):
         return
-    import time
-    err = None
-    for _ in range(3):
-        try:
-            db.seed_if_empty()
-            _bootstrap_from_secrets()
-            st.session_state["_seeded"] = True
-            return
-        except Exception as e:
-            err = e
-            time.sleep(1.0)
-    raise err
+    db.seed_if_empty()
+    _bootstrap_from_secrets()
+    st.session_state["_seeded"] = True
+
+
+def _do_login(email, pw):
+    """Uruchamiane w osobnym wątku pod twardym limitem czasu (patrz niżej) —
+    logowanie NIE dotyka już tabeli products, więc ewentualna blokada na niej
+    (np. po przerwanym wdrożeniu) nie może już zawiesić logowania."""
+    _ensure_seeded()
+    return db.get_user_by_email(email)
 
 
 def _login_form():
     st.title("🔐 Logowanie")
-    st.caption("ONDRE · generator ofert · wersja 2026-09-18")
+    st.caption("ONDRE · generator ofert · wersja 2026-09-18b")
     with st.form("login"):
         email = st.text_input("E-mail")
         pw = st.text_input("Hasło", type="password")
         ok = st.form_submit_button("Zaloguj", type="primary")
     if ok:
+        import concurrent.futures
         try:
             with st.spinner("Łączę z bazą i loguję…"):
-                _ensure_seeded()
-                u = db.get_user_by_email(email)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                    fut = ex.submit(_do_login, email, pw)
+                    u = fut.result(timeout=20)          # twardy limit — nigdy nie wisi dłużej
+        except concurrent.futures.TimeoutError:
+            st.error("Logowanie trwa zbyt długo (ponad 20 s) — baza nie odpowiada. "
+                     "Sprawdź w Supabase (Database → Roles/Connections lub zakładka "
+                     "„Reports”), czy nie ma zawieszonych/długich zapytań do tabeli "
+                     "„products”, i ewentualnie zrestartuj bazę (Settings → General → "
+                     "Restart project). Następnie spróbuj ponownie.")
+            if st.button("🔄 Spróbuj ponownie"):
+                st.rerun()
+            st.stop()
         except Exception as e:
             st.error("Nie mogę połączyć się z bazą danych. Najczęstsza przyczyna: projekt "
                      "Supabase jest wstrzymany (Paused) — wejdź na supabase.com i kliknij "

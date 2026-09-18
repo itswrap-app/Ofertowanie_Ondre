@@ -154,6 +154,7 @@ def get_engine():
 
 
 def init_db():
+    """Tylko struktura tabel (tanie, bez DDL na products) — bezpieczne w ścieżce logowania."""
     global _INIT_DONE
     if _INIT_DONE:
         return
@@ -161,8 +162,23 @@ def init_db():
     CARDS_DIR.mkdir(parents=True, exist_ok=True)
     OFFERS_DIR.mkdir(parents=True, exist_ok=True)
     md.create_all(get_engine())
-    _migrate()
     _INIT_DONE = True
+
+
+_PRODUCTS_SCHEMA_READY = False
+
+
+def ensure_products_schema():
+    """Migracja kolumn tabeli products (ALTER TABLE itp.) — wywoływana LENIWIE,
+    dopiero przy realnym dostępie do cennika/oferty, NIGDY z login_gate. Dzięki
+    temu ewentualna blokada na tabeli products (np. po przerwanym wdrożeniu)
+    nigdy nie zawiesza logowania — najwyżej stronę cennika/oferty."""
+    global _PRODUCTS_SCHEMA_READY
+    if _PRODUCTS_SCHEMA_READY:
+        return
+    init_db()
+    _migrate()
+    _PRODUCTS_SCHEMA_READY = True
 
 
 def _migrate():
@@ -305,7 +321,7 @@ def import_xlsx(path, user="import") -> int:
 
 
 def products_df(active_only=False, scope=None, status=None, client_key=None) -> pd.DataFrame:
-    init_db()
+    ensure_products_schema()
     q = ("SELECT id,section,name,variant,unit,base_cost,m_katalog,m_staly,"
          "m_posrednik,m_agencyjny,m_jedi,active,card_file,note,min_price,"
          "scope,client_key,status,created_by,def_szer,def_wys FROM products")

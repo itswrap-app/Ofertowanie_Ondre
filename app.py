@@ -12,11 +12,26 @@ st.caption("Witaj, %s! Mail klienta → analiza AI → tabela pozycji → PDF z 
            % user["name"].split(" ")[0])
 
 try:
-    with st.spinner("Wczytuję dane…"):
+    import concurrent.futures
+
+    def _load_dashboard():
         df = db.products_df()
         active = df[df["active"] == 1]
         missing = active["base_cost"].isna().sum()
         my_offers = db.offers_df(1000, user_id=user["id"], is_admin=auth.is_admin())
+        return df, active, missing, my_offers
+
+    with st.spinner("Wczytuję dane…"):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
+            df, active, missing, my_offers = _ex.submit(_load_dashboard).result(timeout=20)
+except concurrent.futures.TimeoutError:
+    st.warning("Wczytywanie cennika trwa zbyt długo — być może tabela „products” jest "
+              "zablokowana przez inne zapytanie. Sprawdź w Supabase (Database → Reports) "
+              "długie/zawieszone zapytania, ewentualnie zrestartuj bazę (Settings → General "
+              "→ Restart project).")
+    if st.button("🔄 Odśwież"):
+        st.rerun()
+    st.stop()
 except Exception:
     st.warning("Baza jeszcze się wybudza — daj chwilę i odśwież.")
     if st.button("🔄 Odśwież"):
